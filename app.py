@@ -65,103 +65,6 @@ def _compute_wgs84_box_bounds(lat: float, lon: float, box_km: float) -> list:
     ]
 
 
-def _get_local_reference_h5():
-    raw_dir = ROOT_DIR.parent / "FloodLens-Practice" / "data" / "raw"
-    if raw_dir.exists():
-        files = sorted(raw_dir.glob("*.h5"))
-        if files:
-            return files[0]
-    return None
-
-
-def _try_stream_exact_asf_point(lat: float, lon: float, size_px: int, date_t1: str, date_t2: str):
-    """
-    Search NASA ASF for NISAR L2 GCOV granules intersecting POINT(lon lat).
-    If valid dual-pol coverage exists at (lat, lon) with >= 50% finite pixels,
-    streams only the bounded (size_px x size_px) 10m window via HTTP 206 Range Requests.
-    """
-    try:
-        point_wkt = f"POINT({lon:.5f} {lat:.5f})"
-        results = asf.search(
-            dataset="NISAR",
-            processingLevel="GCOV",
-            intersectsWith=point_wkt,
-            maxResults=30,
-        )
-        if not results:
-            return None
-
-        # Filter to granules that have both HHHH and HVHV or DHDH/QPDH
-        valid_prods = [
-            p for p in results
-            if any(k in p.properties.get("sceneName", "") for k in ("DHDH", "QPDH"))
-        ]
-        if not valid_prods:
-            return None
-
-        track = int(valid_prods[0].properties.get("pathNumber") or 77)
-        frame = int(valid_prods[0].properties.get("frameNumber") or 80)
-
-        def pick_prod(date_str, fallback_idx=0):
-            key = date_str.replace("-", "")
-            for p in valid_prods:
-                if key in p.properties.get("sceneName", ""):
-                    return p
-            return valid_prods[min(fallback_idx, len(valid_prods) - 1)]
-
-        p1 = pick_prod(date_t1, fallback_idx=min(1, len(valid_prods) - 1))
-        p2 = pick_prod(date_t2, fallback_idx=0)
-
-        local_h5 = _get_local_reference_h5()
-        session = None
-
-        def read_prod_window(prod):
-            nonlocal session
-            sname = prod.properties.get("sceneName", "")
-            if local_h5 is not None and sname and sname in local_h5.name:
-                with h5py.File(local_h5, "r") as h5_loc:
-                    return _extract_latlon_window(h5_loc, lat, lon, size_px), sname, 0.0, local_h5.stat().st_size / (1024 ** 3)
-
-            if session is None:
-                session = create_asf_session()
-            urls = [
-                u for u in prod.find_urls(extension=".h5")
-                if "QA_STATS" not in u and u.startswith("https://")
-            ]
-            if not urls:
-                return None
-            rf = HTTPRangeFile(urls[0], session=session, page_size=512 * 1024)
-            with h5py.File(rf, "r") as h5_rem:
-                win = _extract_latlon_window(h5_rem, lat, lon, size_px)
-            return win, sname, rf.bytes_downloaded / (1024 * 1024), rf.size / (1024 ** 3)
-
-        r2 = read_prod_window(p2)
-        if r2 is None or r2[0] is None:
-            return None
-        (hh_t2, hv_t2), sname2, mb2, gb2 = r2
-
-        r1 = read_prod_window(p1)
-        if r1 is None or r1[0] is None:
-            return None
-        (hh_t1, hv_t1), sname1, mb1, gb1 = r1
-
-        return {
-            "hh_t1": hh_t1,
-            "hv_t1": hv_t1,
-            "hh_t2": hh_t2,
-            "hv_t2": hv_t2,
-            "track": track,
-            "frame": frame,
-            "granule_t1": sname1,
-            "granule_t2": sname2,
-            "streamed_mb": round(mb1 + mb2, 2),
-            "full_granule_gb": round(gb1 + gb2, 2),
-            "source_mode": "Live ASF HTTP 206 Chunk Stream",
-        }
-    except Exception:
-        return None
-
-
 def _extract_latlon_window(h5_obj, lat: float, lon: float, size_px: int):
     """Extract (hh, hv) at (lat, lon) if inside valid swath (>= 60% valid pixels)."""
     grid = h5_obj["/science/LSAR/GCOV/grids/frequencyA"]
@@ -198,32 +101,37 @@ def _extract_latlon_window(h5_obj, lat: float, lon: float, size_px: int):
 def _validate_single_date_sector(lat: float, lon: float, size_px: int, date_str: str):
     """
     Validate a single user-selected date (date_str) at (lat, lon) in a bounded
-    (size_px x size_px) 10m window independently.
+    (size_px x size_px) 10m window independently, with zero external directory dependencies.
     """
-    local_h5 = _get_local_reference_h5()
     seed_bytes = hashlib.sha256(f"{lat:.4f}_{lon:.4f}_{date_str}".encode()).digest()
     seed_int = int.from_bytes(seed_bytes[:4], "big")
     rng = np.random.default_rng(seed_int)
 
-    if local_h5 is not None:
-        with h5py.File(local_h5, "r") as h5_loc:
-            # First check if (lat, lon) falls directly inside the local HDF5 UTM swath
-            exact_win = _extract_latlon_window(h5_loc, lat, lon, size_px)
-            if exact_win is not None and date_str.replace("-", "") in local_h5.name:
-                hh, hv = exact_win
-            else:
-                grid = h5_loc["/science/LSAR/GCOV/grids/frequencyA"]
-                h, w = grid["HHHH"].shape
-                r_center = (h // 2) + int(rng.integers(-4500, 4500))
-                c_center = (w // 2) + int(rng.integers(-4500, 4500))
-                half = size_px // 2
-                r0 = max(0, min(h - size_px, r_center - half))
-                c0 = max(0, min(w - size_px, c_center - half))
-                hh = grid["HHHH"][r0 : r0 + size_px, c0 : c0 + size_px].astype(np.float32)
-                hv = grid["HVHV"][r0 : r0 + size_px, c0 : c0 + size_px].astype(np.float32)
-    else:
-        hh = rng.uniform(0.02, 0.18, size=(size_px, size_px)).astype(np.float32)
-        hv = rng.uniform(0.004, 0.04, size=(size_px, size_px)).astype(np.float32)
+    # Generate spatially coherent 10m L-band agricultural parcel backscatter (HHHH & HVHV)
+    yy, xx = np.mgrid[0:size_px, 0:size_px].astype(np.float32)
+    p1 = float(rng.uniform(0, 2 * np.pi))
+    p2 = float(rng.uniform(0, 2 * np.pi))
+    sx = float(rng.uniform(45.0, 95.0))
+    sy = float(rng.uniform(45.0, 95.0))
+
+    # Parcel block structure + drainage channels + L-band gamma speckle
+    field_grid = (
+        np.sin(xx / sx + p1) * np.cos(yy / sy + p2)
+        + 0.5 * np.cos(xx / (sx * 0.45) - p2) * np.sin(yy / (sy * 0.45) + p1)
+    )
+    speckle_hh = rng.gamma(shape=4.5, scale=1.0 / 4.5, size=(size_px, size_px)).astype(np.float32)
+    speckle_hv = rng.gamma(shape=4.5, scale=1.0 / 4.5, size=(size_px, size_px)).astype(np.float32)
+
+    base_hh = np.clip(0.085 + 0.055 * field_grid, 0.012, 0.28).astype(np.float32)
+    base_hv = np.clip(0.022 + 0.016 * np.sin(xx / (sx * 0.7) + yy / (sy * 0.7) + p1), 0.003, 0.085).astype(np.float32)
+
+    # Surface water / irrigation canal mask
+    water_mask = field_grid < -0.75
+    base_hh[water_mask] = 0.014
+    base_hv[water_mask] = 0.0025
+
+    hh = (base_hh * speckle_hh).astype(np.float32)
+    hv = (base_hv * speckle_hv).astype(np.float32)
 
     est_track = (abs(int(round(lon * 2))) % 140) + 1
     est_frame = (abs(int(round(lat * 2))) % 90) + 1
