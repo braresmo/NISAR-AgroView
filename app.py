@@ -19,7 +19,7 @@ import threading
 import time
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 logging.basicConfig(
     level=logging.INFO,
@@ -122,7 +122,7 @@ def _find_nisar_granules_for_location(lat: float, lon: float) -> list:
             dataset="NISAR",
             processingLevel="GCOV",
             intersectsWith=wkt,
-            maxResults=35,
+            maxResults=100,
         )
         valid_prods = [
             p for p in results
@@ -134,6 +134,54 @@ def _find_nisar_granules_for_location(lat: float, lon: float) -> list:
             return valid_prods
 
     raise ValueError("No NISAR L2 Dual-Pol GCOV granules found near the selected location.")
+
+
+def get_available_dates_for_location(lat: float, lon: float) -> dict:
+    """
+    Return the exact valid NISAR Dual-Pol acquisition dates available in NASA ASF
+    for the user's selected (lat, lon) coordinate so the frontend only allows valid dates.
+    """
+    valid_prods = _find_nisar_granules_for_location(lat, lon)
+
+    # Group by (pathNumber, frameNumber) and pick the primary track/frame with the richest time-series
+    groups = {}
+    for p in valid_prods:
+        key = (p.properties.get("pathNumber"), p.properties.get("frameNumber"))
+        groups.setdefault(key, []).append(p)
+
+    best_group = max(groups.values(), key=lambda g: len(g))
+    track = int(best_group[0].properties.get("pathNumber") or 77)
+    frame = int(best_group[0].properties.get("frameNumber") or 80)
+
+    seen_dates = {}
+    for p in best_group:
+        sname = p.properties.get("sceneName", "")
+        dt_str = _parse_granule_date(sname).strftime("%Y-%m-%d")
+        parts = sname.split("_")
+        cycle_str = parts[4] if len(parts) > 4 else ""
+        if dt_str not in seen_dates:
+            label = f"{dt_str} (Cycle {cycle_str} • T{track})" if cycle_str else f"{dt_str} (Track {track})"
+            seen_dates[dt_str] = {"date": dt_str, "label": label, "scene": sname}
+
+    # If the primary track/frame only has 1 date, also include dates from adjacent overlapping tracks
+    if len(seen_dates) < 2:
+        for p in valid_prods:
+            sname = p.properties.get("sceneName", "")
+            dt_str = _parse_granule_date(sname).strftime("%Y-%m-%d")
+            t_num = int(p.properties.get("pathNumber") or track)
+            parts = sname.split("_")
+            cycle_str = parts[4] if len(parts) > 4 else ""
+            if dt_str not in seen_dates:
+                label = f"{dt_str} (Cycle {cycle_str} • T{t_num})"
+                seen_dates[dt_str] = {"date": dt_str, "label": label, "scene": sname}
+
+    sorted_dates = sorted(seen_dates.values(), key=lambda x: x["date"], reverse=True)
+    return {
+        "status": "ok",
+        "track": track,
+        "frame": frame,
+        "dates": sorted_dates,
+    }
 
 
 def _select_granule_pair(valid_prods: list, date_t1: str, date_t2: str):
@@ -207,27 +255,38 @@ def _extract_sector_from_remote_h5(prod, lat: float, lon: float, size_px: int):
         h, w = grid["HHHH"].shape
         half = size_px // 2
 
-        # Clamp target center to the guaranteed finite interior of the tilted radar swath
-        # so we only read the target 512x512 chunks once without touching NaN corner chunks
-        rc = max(int(h * 0.28), min(int(h * 0.72), row_c))
-        cc = max(int(w * 0.28), min(int(w * 0.72), col_c))
-        r0 = max(0, min(h - size_px, rc - half))
-        c0 = max(0, min(w - size_px, cc - half))
-        r1, c1 = r0 + size_px, c0 + size_px
+        # Extract at the exact UTM row/col of (lat, lon); only step inward if the target
+        # falls in the diagonal NaN padding outside the radar swath
+        hh, hv = None, None
+        for alpha in (0.0, 0.2, 0.4, 0.6):
+            rc = int(round((1.0 - alpha) * row_c + alpha * (h // 2)))
+            cc = int(round((1.0 - alpha) * col_c + alpha * (w // 2)))
+            r0 = max(0, min(h - size_px, rc - half))
+            c0 = max(0, min(w - size_px, cc - half))
+            r1, c1 = r0 + size_px, c0 + size_px
 
-        hh = grid["HHHH"][r0:r1, c0:c1].astype(np.float32)
-        hv = grid["HVHV"][r0:r1, c0:c1].astype(np.float32)
+            cand_hh = grid["HHHH"][r0:r1, c0:c1].astype(np.float32)
+            valid_ratio = float(np.mean(np.isfinite(cand_hh) & (cand_hh > 0)))
+            if valid_ratio >= 0.45 or alpha == 0.6:
+                hh = cand_hh
+                hv = grid["HVHV"][r0:r1, c0:c1].astype(np.float32)
+                break
 
+    coords_poly = prod.geometry.get("coordinates", [[]])[0] if hasattr(prod, "geometry") and prod.geometry else []
+    poly_wkt = "POLYGON((" + ", ".join(f"{pt[0]:.5f} {pt[1]:.5f}" for pt in coords_poly) + "))" if coords_poly else "N/A"
     streamed_mb = rf.bytes_downloaded / (1024 * 1024)
     full_gb = rf.size / (1024 ** 3)
+    logger.info("[GRANULE POLYGON] %s -> %s", sname, poly_wkt)
     logger.info(
-        "[HDF5 SLICE] Extracted %dx%d window [%d:%d, %d:%d] from %s (%.2f MB in %d HTTP 206 requests)",
+        "[HDF5 SLICE] Extracted %dx%d window [%d:%d, %d:%d] at exact (row=%d, col=%d) from %s (%.2f MB in %d HTTP 206 requests)",
         size_px,
         size_px,
         r0,
         r1,
         c0,
         c1,
+        row_c,
+        col_c,
         sname,
         streamed_mb,
         rf.requests_count,
@@ -237,13 +296,23 @@ def _extract_sector_from_remote_h5(prod, lat: float, lon: float, size_px: int):
 
 def _find_granule_for_date(lat: float, lon: float, date_str: str, fallback_prods: list = None):
     """
-    Query NASA ASF specifically around `date_str` (+/- 24 days) at (lat, lon)
-    so changing Date 1 or Date 2 in the frontend searches NASA ASF for that specific date window.
+    Find the NISAR L2 GCOV granule matching `date_str` at (lat, lon).
+    Checks `fallback_prods` first (which already contains up to 100 granules at (lat, lon)),
+    and queries NASA ASF with a narrow date window if needed.
     """
     try:
         target_dt = datetime.strptime(date_str, "%Y-%m-%d")
     except ValueError:
         target_dt = datetime(2026, 11, 1)
+
+    if fallback_prods:
+        sorted_fb = sorted(
+            fallback_prods,
+            key=lambda p: abs((_parse_granule_date(p.properties.get("sceneName", "")) - target_dt).days),
+        )
+        best_fb = sorted_fb[0]
+        if abs((_parse_granule_date(best_fb.properties.get("sceneName", "")) - target_dt).days) <= 6:
+            return best_fb
 
     start_iso = (target_dt - timedelta(days=24)).strftime("%Y-%m-%dT00:00:00Z")
     end_iso = (target_dt + timedelta(days=24)).strftime("%Y-%m-%dT23:59:59Z")
@@ -281,10 +350,6 @@ def _find_granule_for_date(lat: float, lon: float, date_str: str, fallback_prods
         logger.warning("[ASF DATE SEARCH] Error querying date %s: %s", date_str, exc)
 
     if fallback_prods:
-        sorted_fb = sorted(
-            fallback_prods,
-            key=lambda p: abs((_parse_granule_date(p.properties.get("sceneName", "")) - target_dt).days),
-        )
         chosen_fb = sorted_fb[0].properties.get("sceneName", "")
         logger.info("[ASF DATE SEARCH] No exact window match for %s; using closest fallback -> %s", date_str, chosen_fb)
         return sorted_fb[0]
@@ -572,9 +637,20 @@ class AgroViewRequestHandler(SimpleHTTPRequestHandler):
         self.wfile.write(raw)
 
     def do_GET(self):
-        parsed = urlparse(self.path).path
+        parsed_url = urlparse(self.path)
+        parsed = parsed_url.path
         if parsed == "/api/search-zone":
             self._send_json(SECTOR_LIMITS)
+            return
+        if parsed == "/api/available-dates":
+            try:
+                qs = parse_qs(parsed_url.query)
+                lat = float(qs.get("lat", [16.815])[0])
+                lon = float(qs.get("lon", [78.705])[0])
+                data = get_available_dates_for_location(lat, lon)
+                self._send_json(data)
+            except Exception as exc:
+                self._send_json({"status": "error", "message": str(exc)}, status=500)
             return
         super().do_GET()
 
