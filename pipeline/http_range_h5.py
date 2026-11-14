@@ -13,14 +13,15 @@ from dotenv import load_dotenv
 
 
 def create_asf_session(env_path=None):
-    """Authenticate an ASFSession using NASA_USER and NASA_PASS."""
+    """Authenticate an ASFSession using NASA_USER and NASA_PASS from project .env."""
     if env_path and Path(env_path).exists():
-        load_dotenv(env_path)
+        load_dotenv(env_path, override=True)
     else:
-        load_dotenv()
-        fallback_env = Path(__file__).resolve().parents[2] / "FloodLens-Practice" / ".env"
-        if fallback_env.exists():
-            load_dotenv(fallback_env)
+        project_env = Path(__file__).resolve().parents[1] / ".env"
+        if project_env.exists():
+            load_dotenv(project_env, override=True)
+        else:
+            load_dotenv(override=True)
 
     username = os.getenv("NASA_USER")
     password = os.getenv("NASA_PASS")
