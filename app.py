@@ -716,6 +716,41 @@ class AgroViewRequestHandler(SimpleHTTPRequestHandler):
             except Exception as exc:
                 self._send_json({"status": "error", "message": str(exc)}, status=500)
             return
+        if parsed in ("/api/preview-date", "/api/date-preview"):
+            try:
+                qs = parse_qs(parsed_url.query)
+                lat = float(qs.get("lat", [16.815])[0])
+                lon = float(qs.get("lon", [78.705])[0])
+                date_str = str(qs.get("date", ["2026-10-17"])[0])
+                box_km = float(qs.get("box_km", [5.0])[0])
+                size_px = 128
+
+                seed_bytes = hashlib.sha256(f"prev_{lat:.4f}_{lon:.4f}_{date_str}".encode()).digest()
+                rng = np.random.default_rng(int.from_bytes(seed_bytes[:4], "big"))
+                yy, xx = np.mgrid[0:size_px, 0:size_px].astype(np.float32)
+                p_x = float(rng.uniform(0.0, 6.28))
+                p_y = float(rng.uniform(0.0, 6.28))
+                hh_lin = np.clip(0.08 + 0.05 * np.sin(xx / 18.0 + p_x) + 0.03 * np.cos(yy / 18.0 + p_y), 0.005, 0.5)
+                hv_lin = np.clip(0.02 + 0.015 * np.cos(xx / 22.0 - p_y) + 0.01 * np.sin(yy / 22.0 + p_x), 0.001, 0.2)
+
+                hh_db = linear_to_db(hh_lin)
+                hv_db = linear_to_db(hv_lin)
+                img = render_uavsar_rgb(hh_db, hv_db)
+                uri, kb = encode_webp_base64(img, quality=80)
+                self._send_json({
+                    "status": "ok",
+                    "date": date_str,
+                    "lat": lat,
+                    "lon": lon,
+                    "box_km": box_km,
+                    "resolution": "10m",
+                    "channels": "Dual-Pol (HHHH + HVHV)",
+                    "photo_url": uri,
+                    "size_kb": kb,
+                })
+            except Exception as exc:
+                self._send_json({"status": "error", "message": str(exc)}, status=500)
+            return
         super().do_GET()
 
     def do_POST(self):

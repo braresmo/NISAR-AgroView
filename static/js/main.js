@@ -18,9 +18,157 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   const inspector = new window.FieldInspectorCharts("parcelChart");
 
+  // Story Card Closable Controls
+  const mapStoryCard = document.getElementById("mapStoryCard");
+  const btnCloseStoryCard = document.getElementById("btnCloseStoryCard");
+  const btnOpenStoryCard = document.getElementById("btnOpenStoryCard");
+
+  if (btnCloseStoryCard && mapStoryCard) {
+    btnCloseStoryCard.addEventListener("click", () => {
+      mapStoryCard.classList.add("hidden");
+      if (btnOpenStoryCard) btnOpenStoryCard.classList.remove("hidden");
+    });
+  }
+
+  if (btnOpenStoryCard && mapStoryCard) {
+    btnOpenStoryCard.addEventListener("click", () => {
+      mapStoryCard.classList.remove("hidden");
+      btnOpenStoryCard.classList.add("hidden");
+    });
+  }
+
+  // Exact Dates & Photo Previews in Split Control Group & Dashboard
+  const splitRatioBadge = document.getElementById("splitRatioBadge");
+  const splitThumbImg1 = document.getElementById("splitThumbImg1");
+  const splitThumbImg2 = document.getElementById("splitThumbImg2");
+  const splitThumbLoading1 = document.getElementById("splitThumbLoading1");
+  const splitThumbLoading2 = document.getElementById("splitThumbLoading2");
+  const dashPhotoImg1 = document.getElementById("dashPhotoImg1");
+  const dashPhotoImg2 = document.getElementById("dashPhotoImg2");
+  const dashPhotoPlaceholder1 = document.getElementById("dashPhotoPlaceholder1");
+  const dashPhotoPlaceholder2 = document.getElementById("dashPhotoPlaceholder2");
+  const curtainDate1 = document.getElementById("curtainDate1");
+  const curtainDate2 = document.getElementById("curtainDate2");
+  const splitThumbDate1 = document.getElementById("splitThumbDate1");
+  const splitThumbDate2 = document.getElementById("splitThumbDate2");
+  const labelSplitLeft = document.getElementById("labelSplitLeft");
+  const labelSplitRight = document.getElementById("labelSplitRight");
+
+  // Lightbox elements
+  const photoLightbox = document.getElementById("photoLightboxModal");
+  const lightboxImg = document.getElementById("lightboxImg");
+  const lightboxTitle = document.getElementById("lightboxTitle");
+  const lightboxKicker = document.getElementById("lightboxKicker");
+  const lightboxMetaBar = document.getElementById("lightboxMetaBar");
+  const btnCloseLightbox = document.getElementById("btnClosePhotoLightbox");
+
+  let photoCache = {
+    t1: null,
+    t2: null,
+    meta1: null,
+    meta2: null,
+  };
+
+  function updateDateLabels(d1, d2) {
+    if (labelSplitLeft) labelSplitLeft.textContent = d1;
+    if (labelSplitRight) labelSplitRight.textContent = d2;
+    if (curtainDate1) curtainDate1.textContent = d1;
+    if (curtainDate2) curtainDate2.textContent = d2;
+    if (splitThumbDate1) splitThumbDate1.textContent = d1;
+    if (splitThumbDate2) splitThumbDate2.textContent = d2;
+    const d1Text = document.getElementById("dateT1Text");
+    if (d1Text) d1Text.textContent = d1;
+    const d2Text = document.getElementById("dateT2Text");
+    if (d2Text) d2Text.textContent = d2;
+    mapCtrl.setDates(d1, d2);
+  }
+
+  async function fetchDatePhotoPreview(dateStr, slotIndex) {
+    const lat = mapCtrl.selectedLat;
+    const lon = mapCtrl.selectedLon;
+    const boxKm = mapCtrl.selectedBoxKm;
+
+    try {
+      const resp = await fetch(
+        `/api/preview-date?lat=${lat}&lon=${lon}&date=${encodeURIComponent(
+          dateStr
+        )}&box_km=${boxKm}`
+      );
+      if (!resp.ok) return;
+      const data = await resp.json();
+      if (data.status === "ok" && data.photo_url) {
+        if (slotIndex === 1) {
+          photoCache.t1 = data.photo_url;
+          photoCache.meta1 = data;
+          if (splitThumbImg1) {
+            splitThumbImg1.src = data.photo_url;
+            splitThumbImg1.classList.remove("hidden");
+          }
+          if (splitThumbLoading1) splitThumbLoading1.classList.add("hidden");
+          if (dashPhotoImg1) {
+            dashPhotoImg1.src = data.photo_url;
+            dashPhotoImg1.classList.remove("hidden");
+          }
+          if (dashPhotoPlaceholder1) dashPhotoPlaceholder1.classList.add("hidden");
+        } else {
+          photoCache.t2 = data.photo_url;
+          photoCache.meta2 = data;
+          if (splitThumbImg2) {
+            splitThumbImg2.src = data.photo_url;
+            splitThumbImg2.classList.remove("hidden");
+          }
+          if (splitThumbLoading2) splitThumbLoading2.classList.add("hidden");
+          if (dashPhotoImg2) {
+            dashPhotoImg2.src = data.photo_url;
+            dashPhotoImg2.classList.remove("hidden");
+          }
+          if (dashPhotoPlaceholder2) dashPhotoPlaceholder2.classList.add("hidden");
+        }
+      }
+    } catch (err) {
+      console.warn(`Could not fetch preview photo for ${dateStr}:`, err);
+    }
+  }
+
+  function refreshAllPreviews() {
+    const d1 = selDate1.value;
+    const d2 = selDate2.value;
+    updateDateLabels(d1, d2);
+    fetchDatePhotoPreview(d1, 1);
+    fetchDatePhotoPreview(d2, 2);
+  }
+
+  function openPhotoLightbox(slotIndex) {
+    const isT1 = slotIndex === 1;
+    const imgUrl = isT1 ? photoCache.t1 : photoCache.t2;
+    const dateStr = isT1 ? selDate1.value : selDate2.value;
+    const meta = isT1 ? photoCache.meta1 : photoCache.meta2;
+
+    if (!imgUrl) return;
+
+    lightboxImg.src = imgUrl;
+    lightboxTitle.textContent = `${isT1 ? "Date 1 (t1 Baseline)" : "Date 2 (t2 Validation)"} Photo — ${dateStr}`;
+    lightboxKicker.textContent = `10m Polarimetric SAR UAVSAR False-Color RGB (${dateStr})`;
+
+    if (lightboxMetaBar && meta) {
+      lightboxMetaBar.innerHTML = `
+        <span><strong>Acquisition:</strong> ${meta.date || dateStr}</span>
+        <span><strong>Coordinates:</strong> ${meta.lat?.toFixed?.(4) || mapCtrl.selectedLat}°N, ${meta.lon?.toFixed?.(4) || mapCtrl.selectedLon}°E</span>
+        <span><strong>Polarization:</strong> ${meta.channels || "Dual-Pol (HHHH + HVHV)"}</span>
+        <span><strong>Native Resolution:</strong> ${meta.resolution || "10m"}</span>
+      `;
+    }
+
+    photoLightbox.classList.remove("hidden");
+  }
+
   const mapCtrl = new window.AgroGoogleMapController("map", {
     onTargetMoved: (lat, lon, boxKm) => {
       coordReadout.textContent = `${lat.toFixed(4)}°N, ${lon.toFixed(4)}°E (${boxKm}×${boxKm} km)`;
+      // Keep existing validated sector data & photos completely intact until user validates the new zone
+      if (!mapCtrl.activeSector) {
+        refreshAllPreviews();
+      }
     },
     onParcelSelected: (parcelProps) => {
       inspector.updateParcel(parcelProps);
@@ -29,6 +177,49 @@ document.addEventListener("DOMContentLoaded", async () => {
       inspector.clearInspector();
     },
   });
+
+  // Initial date synchronization & preview load
+  updateDateLabels(selDate1.value, selDate2.value);
+  refreshAllPreviews();
+
+  selDate1.addEventListener("change", () => {
+    if (!mapCtrl.activeSector) {
+      updateDateLabels(selDate1.value, selDate2.value);
+      fetchDatePhotoPreview(selDate1.value, 1);
+    }
+  });
+
+  selDate2.addEventListener("change", () => {
+    if (!mapCtrl.activeSector) {
+      updateDateLabels(selDate1.value, selDate2.value);
+      fetchDatePhotoPreview(selDate2.value, 2);
+    }
+  });
+
+  // Wire photo preview clicks to Lightbox
+  document.getElementById("splitCardT1")?.addEventListener("click", () => {
+    openPhotoLightbox(1);
+  });
+  document.getElementById("splitCardT2")?.addEventListener("click", () => {
+    openPhotoLightbox(2);
+  });
+  document.getElementById("dashPhotoBox1")?.addEventListener("click", () => {
+    openPhotoLightbox(1);
+  });
+  document.getElementById("dashPhotoBox2")?.addEventListener("click", () => {
+    openPhotoLightbox(2);
+  });
+
+  if (btnCloseLightbox && photoLightbox) {
+    btnCloseLightbox.addEventListener("click", () => {
+      photoLightbox.classList.add("hidden");
+    });
+    photoLightbox.addEventListener("click", (e) => {
+      if (e.target === photoLightbox) {
+        photoLightbox.classList.add("hidden");
+      }
+    });
+  }
 
   // Load Allowed Search Zone metadata from backend
   try {
@@ -101,6 +292,33 @@ document.addEventListener("DOMContentLoaded", async () => {
         }
 
         const sector = data.sector;
+
+        if (sector.overlays && sector.overlays.t1_rgb && sector.overlays.t2_rgb) {
+          photoCache.t1 = sector.overlays.t1_rgb;
+          photoCache.t2 = sector.overlays.t2_rgb;
+          if (splitThumbImg1) {
+            splitThumbImg1.src = sector.overlays.t1_rgb;
+            splitThumbImg1.classList.remove("hidden");
+          }
+          if (splitThumbLoading1) splitThumbLoading1.classList.add("hidden");
+          if (splitThumbImg2) {
+            splitThumbImg2.src = sector.overlays.t2_rgb;
+            splitThumbImg2.classList.remove("hidden");
+          }
+          if (splitThumbLoading2) splitThumbLoading2.classList.add("hidden");
+          if (dashPhotoImg1) {
+            dashPhotoImg1.src = sector.overlays.t1_rgb;
+            dashPhotoImg1.classList.remove("hidden");
+          }
+          if (dashPhotoPlaceholder1) dashPhotoPlaceholder1.classList.add("hidden");
+          if (dashPhotoImg2) {
+            dashPhotoImg2.src = sector.overlays.t2_rgb;
+            dashPhotoImg2.classList.remove("hidden");
+          }
+          if (dashPhotoPlaceholder2) dashPhotoPlaceholder2.classList.add("hidden");
+        }
+
+        updateDateLabels(d1, d2);
         mapCtrl.loadValidatedSector(sector);
         inspector.renderSectorSummary(sector);
       } catch (err) {
@@ -135,7 +353,11 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // Split Swipe Slider
   document.getElementById("splitRange").addEventListener("input", (e) => {
-    mapCtrl.setSplitPercent(Number(e.target.value));
+    const val = Number(e.target.value);
+    if (splitRatioBadge) {
+      splitRatioBadge.textContent = `${val}% ⟷ ${100 - val}%`;
+    }
+    mapCtrl.setSplitPercent(val);
   });
 
   // Opacity Slider

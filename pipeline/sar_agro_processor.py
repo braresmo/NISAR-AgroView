@@ -350,12 +350,15 @@ def generate_sector_parcels_geojson(
                     "hh_t1_db": m_hh1,
                     "hh_t2_db": m_hh2,
                     "delta_hh_db": d_hh,
+                    "diff_hh_db": d_hh,
                     "hv_t1_db": m_hv1,
                     "hv_t2_db": m_hv2,
                     "delta_hv_db": d_hv,
+                    "diff_hv_db": d_hv,
                     "rvi_t1": m_rvi1,
                     "rvi_t2": m_rvi2,
                     "delta_rvi": d_rvi,
+                    "diff_rvi": d_rvi,
                     "explanation": explanation,
                     "timeseries": {
                         "labels": [
