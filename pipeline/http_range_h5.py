@@ -1,8 +1,8 @@
 """
 HTTP 206 Range Request File Wrapper for Cloud-Optimized NISAR HDF5 (.h5) Streaming.
 
-Streams only the necessary 512x512 HDF5 spatial chunks and B-tree headers (~2-5 MB)
-from NASA Earthdata Cloud (ASF) without downloading full 4-9 GB .h5 granules.
+Streams only the necessary 512x512 HDF5 spatial chunks and B-tree headers (~4-12 MB)
+directly from NASA Earthdata Cloud (ASF) without downloading full 4-9 GB .h5 granules.
 """
 
 import io
@@ -34,10 +34,10 @@ def create_asf_session(env_path=None):
 class HTTPRangeFile(io.RawIOBase):
     """
     Seekable read-only file-like object backed by HTTP 206 Range Requests
-    with in-memory page caching for fast h5py B-tree and chunk access.
+    with in-memory 2 MB page caching for fast h5py B-tree and chunk access.
     """
 
-    def __init__(self, url: str, session=None, page_size: int = 1024 * 1024):
+    def __init__(self, url: str, session=None, page_size: int = 2 * 1024 * 1024):
         super().__init__()
         self.url = url
         self.session = session or create_asf_session()
@@ -46,23 +46,34 @@ class HTTPRangeFile(io.RawIOBase):
         self.bytes_downloaded = 0
         self.requests_count = 0
         self._pages = {}
-        self.size = self._probe_size()
+        self.size = self._probe_and_prefetch_page0()
 
-    def _probe_size(self) -> int:
+    def _probe_and_prefetch_page0(self) -> int:
+        """
+        Fetch page 0 (first 2 MB) in a single HTTP 206 request to simultaneously:
+          1. Resolve the final NASA Earthdata Cloud signed redirect URL,
+          2. Read total file size from Content-Range, and
+          3. Cache the HDF5 superblock & root B-tree header in self._pages[0].
+        """
+        end_byte = self.page_size - 1
         resp = self.session.get(
             self.url,
-            headers={"Range": "bytes=0-0"},
-            stream=True,
-            timeout=30,
+            headers={"Range": f"bytes=0-{end_byte}"},
+            timeout=45,
         )
         resp.raise_for_status()
-        # Update URL to final redirect target so subsequent Range requests avoid redirect round-trips
         if resp.url:
             self.url = resp.url
+
+        data = resp.content
+        self._pages[0] = data
+        self.bytes_downloaded += len(data)
+        self.requests_count += 1
+
         content_range = resp.headers.get("Content-Range", "")
         if "/" in content_range:
             return int(content_range.split("/")[-1])
-        return int(resp.headers.get("Content-Length", 0))
+        return int(resp.headers.get("Content-Length", len(data)))
 
     def readable(self) -> bool:
         return True
@@ -122,8 +133,7 @@ class HTTPRangeFile(io.RawIOBase):
         start_page = self.pos // self.page_size
         end_page = (end_pos - 1) // self.page_size
 
-        # If a single large read spans multiple uncached pages, fetch contiguously
-        if end_page - start_page >= 2 and any(p not in self._pages for p in range(start_page, end_page + 1)):
+        if end_page - start_page >= 1 and any(p not in self._pages for p in range(start_page, end_page + 1)):
             raw = self._fetch_range(start_page * self.page_size, (end_page + 1) * self.page_size - 1)
             for p in range(start_page, end_page + 1):
                 offset = (p - start_page) * self.page_size
@@ -144,4 +154,3 @@ class HTTPRangeFile(io.RawIOBase):
 
         self.pos = cur
         return written
-
