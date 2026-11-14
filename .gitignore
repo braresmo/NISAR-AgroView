@@ -12,6 +12,7 @@ data/processed/
 # Environment variables & secrets
 .env
 .env.*
+!.env.example
 
 # Editor and OS files
 .vscode/
@@ -19,3 +20,4 @@ data/processed/
 .DS_Store
 Thumbs.db
 *.log
+
