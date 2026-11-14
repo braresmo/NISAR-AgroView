@@ -251,26 +251,26 @@ class FieldInspectorCharts {
     const hvBadge = `<span class="delta-badge ${dHv > 0.4 ? 'pos' : dHv < -0.4 ? 'neg' : 'neutral'}">${dHv > 0 ? '+' : ''}${dHv} dB</span>`;
     const rviBadge = `<span class="delta-badge ${dRvi > 0.025 ? 'pos' : dRvi < -0.025 ? 'neg' : 'neutral'}">${dRvi > 0 ? '+' : ''}${dRvi}</span>`;
 
-    // Trend dynamics interpretation
+    // Trend dynamics interpretation (pure qualitative text — numbers are in Net Change column)
     let hhTrend = `<span class="trend-cell">↔ Moisture Stable</span>`;
     if (dHh >= 1.5) {
-      hhTrend = `<span class="trend-cell cyan">↑ Influx / Flood (+${dHh} dB)</span>`;
+      hhTrend = `<span class="trend-cell cyan">↑ Influx / Flooding</span>`;
     } else if (dHh <= -1.5) {
-      hhTrend = `<span class="trend-cell neg">↓ Soil Drying (${dHh} dB)</span>`;
+      hhTrend = `<span class="trend-cell neg">↓ Soil Drying</span>`;
     }
 
     let hvTrend = `<span class="trend-cell">↔ Canopy Stable</span>`;
     if (dHv >= 0.9) {
-      hvTrend = `<span class="trend-cell pos">↑ Canopy Growth (+${dHv} dB)</span>`;
+      hvTrend = `<span class="trend-cell pos">↑ Canopy Growth</span>`;
     } else if (dHv <= -0.9) {
-      hvTrend = `<span class="trend-cell neg">↓ Harvest / Thinning (${dHv} dB)</span>`;
+      hvTrend = `<span class="trend-cell neg">↓ Harvest / Thinning</span>`;
     }
 
     let rviTrend = `<span class="trend-cell">↔ Steady Biomass</span>`;
     if (dRvi >= 0.04) {
-      rviTrend = `<span class="trend-cell pos">↑ Biomass Acc. (+${dRvi})</span>`;
+      rviTrend = `<span class="trend-cell pos">↑ Biomass Accumulation</span>`;
     } else if (dRvi <= -0.04) {
-      rviTrend = `<span class="trend-cell neg">↓ Biomass Decline (${dRvi})</span>`;
+      rviTrend = `<span class="trend-cell neg">↓ Biomass Decline</span>`;
     }
 
     document.getElementById("tdHh1").textContent = `${parcelProps.hh_t1_db} dB`;
