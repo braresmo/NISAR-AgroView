@@ -19,7 +19,7 @@ class AgroGoogleMapController {
     this.selectedBoxKm = 5.0;
 
     this.activeSector = null;
-    this.activeLayerMode = "change";
+    this.activeLayerMode = "split";
     this.opacity = 0.88;
     this.splitPercent = 50;
     this.showParcels = true;
@@ -298,7 +298,7 @@ class AgroGoogleMapController {
     } else {
       const dataUri =
         this.activeSector.overlays[this.activeLayerMode] ||
-        this.activeSector.overlays.change;
+        this.activeSector.overlays.t2_rgb;
       this.primaryOverlay = L.imageOverlay(dataUri, boundsLatLng, {
         opacity: this.opacity,
         interactive: false,

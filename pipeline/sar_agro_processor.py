@@ -1,18 +1,17 @@
 """
-NISAR L-Band Polarimetric Agricultural Change Processor (10m Native Resolution).
+NISAR L-Band Polarimetric Dual-Date Validation Processor (10m Native Resolution).
 
-Computes Co-Pol (HHHH dB), Cross-Pol (HVHV dB), Radar Vegetation Index (RVI),
-UAVSAR-style False-Color RGB composites, Two-Date Agricultural Change Classification,
-and Parcel-Level Telemetry GeoJSON for Google Maps overlay rendering.
+Validates Date 1 (t1) and Date 2 (t2) independently—computing Co-Pol (HHHH dB),
+Cross-Pol (HVHV dB), Radar Vegetation Index (RVI), UAVSAR-style False-Color RGB
+composites, and Parcel-Level Dual-Date Telemetry GeoJSON in memory without heavy
+change-classification overhead.
 """
 
 import base64
 import io
-from pathlib import Path
 import numpy as np
 from PIL import Image
 from pyproj import Transformer
-from scipy.ndimage import uniform_filter
 
 
 def linear_to_db(arr: np.ndarray) -> np.ndarray:
@@ -37,18 +36,6 @@ def compute_rvi(hh_lin: np.ndarray, hv_lin: np.ndarray) -> np.ndarray:
     rvi = np.full(hh.shape, np.nan, dtype=np.float32)
     rvi[valid] = np.clip((4.0 * hv[valid]) / denom[valid], 0.0, 1.0)
     return rvi
-
-
-def despeckle_nan(arr: np.ndarray, size: int = 3) -> np.ndarray:
-    """Apply fast NaN-aware box filter to reduce SAR speckle noise."""
-    valid = np.isfinite(arr)
-    filled = np.where(valid, arr, 0.0).astype(np.float32)
-    weights = uniform_filter(valid.astype(np.float32), size=size)
-    smoothed = uniform_filter(filled, size=size)
-    out = np.full(arr.shape, np.nan, dtype=np.float32)
-    mask = weights > 0.25
-    out[mask] = smoothed[mask] / weights[mask]
-    return out
 
 
 def _norm_u8(arr: np.ndarray, vmin: float, vmax: float) -> np.ndarray:
@@ -106,95 +93,6 @@ def render_rvi_overlay(rvi: np.ndarray, hh_db: np.ndarray) -> Image.Image:
     return Image.fromarray(rgba, mode="RGBA")
 
 
-def classify_agricultural_change(
-    hh_t1_db: np.ndarray,
-    hv_t1_db: np.ndarray,
-    rvi_t1: np.ndarray,
-    hh_t2_db: np.ndarray,
-    hv_t2_db: np.ndarray,
-    rvi_t2: np.ndarray,
-):
-    """
-    Classify pixel-level agricultural change between Date 1 (t1) and Date 2 (t2):
-      Class 0: Invalid / NoData
-      Class 1: Vigorous Crop Growth (+HV / +RVI)
-      Class 2: Harvest / Canopy Clearance (-HV / -RVI)
-      Class 3: Irrigation / Flooded Paddy (Specular low HH or sharp HH drop)
-      Class 4: Soil Moisture / Tillage Shift (+HH with low RVI change)
-      Class 5: Stable Cropland
-    Returns (class_map, change_rgba_image, summary_stats_dict).
-    """
-    hh1_s = despeckle_nan(hh_t1_db, size=3)
-    hv1_s = despeckle_nan(hv_t1_db, size=3)
-    hh2_s = despeckle_nan(hh_t2_db, size=3)
-    hv2_s = despeckle_nan(hv_t2_db, size=3)
-    rvi1_s = despeckle_nan(rvi_t1, size=3)
-    rvi2_s = despeckle_nan(rvi_t2, size=3)
-
-    valid = np.isfinite(hh1_s) & np.isfinite(hv1_s) & np.isfinite(hh2_s) & np.isfinite(hv2_s)
-    d_hh = hh2_s - hh1_s
-    d_hv = hv2_s - hv1_s
-    d_rvi = rvi2_s - rvi1_s
-
-    cls = np.zeros(hh_t1_db.shape, dtype=np.uint8)
-    cls[valid] = 5  # Default: Stable Cropland
-
-    # 4: Soil Moisture / Tillage Increase
-    moisture_mask = valid & (d_hh > 1.4) & (np.abs(d_hv) <= 1.6)
-    cls[moisture_mask] = 4
-
-    # 2: Harvest / Crop Clearance
-    harvest_mask = valid & ((d_hv < -1.35) | (d_rvi < -0.075))
-    cls[harvest_mask] = 2
-
-    # 1: Vigorous Crop Growth
-    growth_mask = valid & ((d_hv > 1.35) | (d_rvi > 0.075))
-    cls[growth_mask] = 1
-
-    # 3: Flooded Paddy / Irrigation Water
-    water_mask = valid & ((hh2_s < -16.0) | (d_hh < -2.3))
-    cls[water_mask] = 3
-
-    # Build RGBA visualization
-    h, w = cls.shape
-    rgba = np.zeros((h, w, 4), dtype=np.uint8)
-
-    palette = {
-        1: (16, 185, 129, 230),   # Emerald Green: Crop Growth
-        2: (245, 158, 11, 230),   # Amber Gold: Harvest / Clearance
-        3: (6, 182, 212, 235),    # Cyan Blue: Irrigation / Flooded Field
-        4: (168, 85, 247, 220),   # Violet: Soil Moisture / Tillage
-        5: (30, 41, 59, 65),      # Subtle Slate: Stable Farmland (lets Google Map show through)
-    }
-    for code, color in palette.items():
-        m = cls == code
-        rgba[m] = color
-
-    total_valid = max(int(np.sum(valid)), 1)
-    pixel_area_ha = 0.01  # 10m x 10m = 100 m^2 = 0.01 hectares
-
-    stats = {
-        "valid_area_ha": round(total_valid * pixel_area_ha, 1),
-        "crop_growth_pct": round(float(np.sum(cls == 1)) / total_valid * 100.0, 1),
-        "crop_growth_ha": round(float(np.sum(cls == 1)) * pixel_area_ha, 1),
-        "harvest_pct": round(float(np.sum(cls == 2)) / total_valid * 100.0, 1),
-        "harvest_ha": round(float(np.sum(cls == 2)) * pixel_area_ha, 1),
-        "irrigation_water_pct": round(float(np.sum(cls == 3)) / total_valid * 100.0, 1),
-        "irrigation_water_ha": round(float(np.sum(cls == 3)) * pixel_area_ha, 1),
-        "soil_moisture_pct": round(float(np.sum(cls == 4)) / total_valid * 100.0, 1),
-        "soil_moisture_ha": round(float(np.sum(cls == 4)) * pixel_area_ha, 1),
-        "stable_pct": round(float(np.sum(cls == 5)) / total_valid * 100.0, 1),
-        "mean_hh_t1_db": round(float(np.nanmean(hh1_s)), 2),
-        "mean_hh_t2_db": round(float(np.nanmean(hh2_s)), 2),
-        "mean_hv_t1_db": round(float(np.nanmean(hv1_s)), 2),
-        "mean_hv_t2_db": round(float(np.nanmean(hv2_s)), 2),
-        "mean_rvi_t1": round(float(np.nanmean(rvi1_s)), 3),
-        "mean_rvi_t2": round(float(np.nanmean(rvi2_s)), 3),
-    }
-
-    return cls, Image.fromarray(rgba, mode="RGBA"), stats
-
-
 def utm_bounds_to_wgs84(x_coords: np.ndarray, y_coords: np.ndarray, epsg: int):
     """Convert UTM grid coordinate vectors to WGS84 [south, west, north, east] bounds."""
     transformer = Transformer.from_crs(f"EPSG:{epsg}", "EPSG:4326", always_xy=True)
@@ -210,7 +108,7 @@ def utm_bounds_to_wgs84(x_coords: np.ndarray, y_coords: np.ndarray, epsg: int):
     return [round(south, 6), round(west, 6), round(north, 6), round(east, 6)]
 
 
-def generate_sector_parcels_geojson(
+def generate_dual_date_parcels_geojson(
     sector_id: str,
     bounds_wgs84: list,
     date_t1: str,
@@ -221,23 +119,40 @@ def generate_sector_parcels_geojson(
     hh_t2_db: np.ndarray,
     hv_t2_db: np.ndarray,
     rvi_t2: np.ndarray,
-    cls_map: np.ndarray,
-) -> list:
+) -> tuple[list, dict]:
     """
-    Partition the 10x10 km sector into a 3x3 grid of agricultural monitoring blocks
-    plus hotspot parcels with exact NISAR polarimetric telemetry for the Field Inspector.
+    Fast and optimal dual-date agricultural sector partition (3x3 grid).
+    Validates Date 1 (t1) and Date 2 (t2) telemetry directly without computing
+    change-classification maps or deltas between dates.
+    Returns (parcels_features, sector_stats).
     """
     south, west, north, east = bounds_wgs84
     h, w = hh_t1_db.shape
     grid_n = 3
     features = []
 
-    class_labels = {
-        1: ("Vigorous Crop Growth", "#10b981"),
-        2: ("Harvest / Canopy Clearance", "#f59e0b"),
-        3: ("Irrigation / Flooded Paddy", "#06b6d4"),
-        4: ("Soil Moisture / Tillage Increase", "#a855f7"),
-        5: ("Stable Agricultural Parcel", "#64748b"),
+    valid_1 = np.isfinite(hh_t1_db) & np.isfinite(hv_t1_db)
+    valid_2 = np.isfinite(hh_t2_db) & np.isfinite(hv_t2_db)
+    both_valid = valid_1 & valid_2
+
+    total_valid = max(int(np.sum(both_valid)), 1)
+    pixel_area_ha = 0.01  # 10m x 10m = 0.01 hectares
+
+    overall_m_hh1 = round(float(np.nanmean(hh_t1_db[valid_1])), 2) if np.any(valid_1) else -12.0
+    overall_m_hv1 = round(float(np.nanmean(hv_t1_db[valid_1])), 2) if np.any(valid_1) else -18.0
+    overall_m_rvi1 = round(float(np.nanmean(rvi_t1[valid_1])), 3) if np.any(valid_1) else 0.45
+    overall_m_hh2 = round(float(np.nanmean(hh_t2_db[valid_2])), 2) if np.any(valid_2) else -12.0
+    overall_m_hv2 = round(float(np.nanmean(hv_t2_db[valid_2])), 2) if np.any(valid_2) else -18.0
+    overall_m_rvi2 = round(float(np.nanmean(rvi_t2[valid_2])), 3) if np.any(valid_2) else 0.45
+
+    stats = {
+        "valid_area_ha": round(total_valid * pixel_area_ha, 1),
+        "mean_hh_t1_db": overall_m_hh1,
+        "mean_hh_t2_db": overall_m_hh2,
+        "mean_hv_t1_db": overall_m_hv1,
+        "mean_hv_t2_db": overall_m_hv2,
+        "mean_rvi_t1": overall_m_rvi1,
+        "mean_rvi_t2": overall_m_rvi2,
     }
 
     idx = 1
@@ -248,7 +163,6 @@ def generate_sector_parcels_geojson(
             c0 = int(c_idx * w / grid_n)
             c1 = int((c_idx + 1) * w / grid_n)
 
-            # Inset parcel slightly for clean visual separation on Google Satellite map
             pad_r = int((r1 - r0) * 0.08)
             pad_c = int((c1 - c0) * 0.08)
             sr0, sr1 = r0 + pad_r, r1 - pad_r
@@ -260,113 +174,66 @@ def generate_sector_parcels_geojson(
             sub_hh2 = hh_t2_db[sr0:sr1, sc0:sc1]
             sub_hv2 = hv_t2_db[sr0:sr1, sc0:sc1]
             sub_rvi2 = rvi_t2[sr0:sr1, sc0:sc1]
-            sub_cls = cls_map[sr0:sr1, sc0:sc1]
 
-            if not np.any(np.isfinite(sub_hh2)):
+            sub_v = np.isfinite(sub_hh1) & np.isfinite(sub_hh2)
+            if not np.any(sub_v):
                 continue
 
-            # Find dominant active change class (1..4) or fallback to 5
-            active_counts = {k: int(np.sum(sub_cls == k)) for k in [1, 2, 3, 4]}
-            best_cls = max(active_counts, key=active_counts.get)
-            if active_counts[best_cls] < sub_cls.size * 0.10:
-                best_cls = 5
+            m_hh1 = round(float(np.nanmean(sub_hh1[sub_v])), 2)
+            m_hv1 = round(float(np.nanmean(sub_hv1[sub_v])), 2)
+            m_rvi1 = round(float(np.nanmean(sub_rvi1[sub_v])), 3)
+            m_hh2 = round(float(np.nanmean(sub_hh2[sub_v])), 2)
+            m_hv2 = round(float(np.nanmean(sub_hv2[sub_v])), 2)
+            m_rvi2 = round(float(np.nanmean(sub_rvi2[sub_v])), 3)
 
-            label, color = class_labels[best_cls]
-
-            # Mask statistics to the dominant class pixels inside this parcel for sharp physical signal
-            target_mask = (sub_cls == best_cls) & np.isfinite(sub_hh1) & np.isfinite(sub_hh2)
-            if np.sum(target_mask) < 25:
-                target_mask = np.isfinite(sub_hh1) & np.isfinite(sub_hh2)
-
-            m_hh1 = round(float(np.nanmean(sub_hh1[target_mask])), 2)
-            m_hv1 = round(float(np.nanmean(sub_hv1[target_mask])), 2)
-            m_rvi1 = round(float(np.nanmean(sub_rvi1[target_mask])), 3)
-            m_hh2 = round(float(np.nanmean(sub_hh2[target_mask])), 2)
-            m_hv2 = round(float(np.nanmean(sub_hv2[target_mask])), 2)
-            m_rvi2 = round(float(np.nanmean(sub_rvi2[target_mask])), 3)
-
-            d_hh = round(m_hh2 - m_hh1, 2)
-            d_hv = round(m_hv2 - m_hv1, 2)
-            d_rvi = round(m_rvi2 - m_rvi1, 3)
-
-            # Row 0 is North, Row h is South
             lat_top = north - (sr0 / h) * (north - south)
             lat_bot = north - (sr1 / h) * (north - south)
             lon_left = west + (sc0 / w) * (east - west)
             lon_right = west + (sc1 / w) * (east - west)
 
-            area_ha = round((sr1 - sr0) * (sc1 - sc0) * 0.01, 1)
+            area_ha = round((sr1 - sr0) * (sc1 - sc0) * pixel_area_ha, 1)
 
-            if best_cls == 1:
-                explanation = (
-                    f"Cross-pol HVHV increased by {d_hv:+.2f} dB and Radar Vegetation Index (RVI) "
-                    f"rose from {m_rvi1:.2f} to {m_rvi2:.2f} ({d_rvi:+.2f}). L-band volume scattering "
-                    f"confirms active crop canopy development and biomass accumulation."
-                )
-            elif best_cls == 2:
-                explanation = (
-                    f"Cross-pol HVHV dropped by {d_hv:+.2f} dB and RVI declined from {m_rvi1:.2f} to "
-                    f"{m_rvi2:.2f} ({d_rvi:+.2f}). Loss of depolarizing plant structure indicates crop "
-                    f"harvesting and exposure of bare soil."
-                )
-            elif best_cls == 3:
-                explanation = (
-                    f"Co-pol HHHH reached {m_hh2:.2f} dB (change of {d_hh:+.2f} dB). Smooth water "
-                    f"surfaces act as a specular mirror at L-band (24 cm), reflecting radar pulses away "
-                    f"from the sensor and revealing flooded paddy irrigation."
-                )
-            elif best_cls == 4:
-                explanation = (
-                    f"Co-pol HHHH rose by {d_hh:+.2f} dB while RVI remained relatively steady "
-                    f"({m_rvi1:.2f} to {m_rvi2:.2f}). Higher soil dielectric constant from irrigation "
-                    f"moisture or fresh tillage roughness boosted surface backscatter."
-                )
+            # Classify surface condition on the validated dates based on RVI & Backscatter state
+            if m_hh2 < -16.0 or m_hh1 < -16.0:
+                status = "Surface Water / Irrigated Field"
+                color = "#06b6d4"  # Cyan
+            elif m_rvi2 >= 0.65 and m_rvi1 >= 0.65:
+                status = "High Canopy Biomass (Both Dates)"
+                color = "#10b981"  # Emerald
+            elif m_rvi2 >= 0.45 or m_rvi1 >= 0.45:
+                status = "Active Vegetated Cropland"
+                color = "#38bdf8"  # Sky Blue
             else:
-                explanation = (
-                    f"Backscatter remained stable between {date_t1} and {date_t2} "
-                    f"(ΔHH: {d_hh:+.2f} dB, ΔHV: {d_hv:+.2f} dB, RVI: {m_rvi2:.2f}), "
-                    f"indicating steady crop cover without major disturbance."
-                )
+                status = "Low Canopy / Bare Soil Sector"
+                color = "#f59e0b"  # Amber
 
-            # Build 4-point time-series curve (Date 1 -> Mid-Cycle 1 -> Mid-Cycle 2 -> Date 2)
-            mid_hh_1 = round(m_hh1 + d_hh * 0.35, 2)
-            mid_hh_2 = round(m_hh1 + d_hh * 0.72, 2)
-            mid_hv_1 = round(m_hv1 + d_hv * 0.35, 2)
-            mid_hv_2 = round(m_hv1 + d_hv * 0.72, 2)
-            mid_rvi_1 = round(m_rvi1 + d_rvi * 0.35, 3)
-            mid_rvi_2 = round(m_rvi1 + d_rvi * 0.72, 3)
+            explanation = (
+                f"Date 1 ({date_t1}): HHHH={m_hh1:.1f} dB, HVHV={m_hv1:.1f} dB, RVI={m_rvi1:.3f} • "
+                f"Date 2 ({date_t2}): HHHH={m_hh2:.1f} dB, HVHV={m_hv2:.1f} dB, RVI={m_rvi2:.3f}."
+            )
 
             features.append({
                 "type": "Feature",
                 "properties": {
-                    "parcel_id": f"{sector_id.upper()}-P{idx:02d}",
-                    "name": f"Agricultural Sector Block #{idx}",
-                    "change_class_id": best_cls,
-                    "change_class": label,
+                    "parcel_id": f"{sector_id.upper()}-B{idx:02d}",
+                    "name": f"Validation Block #{idx}",
+                    "change_class": status,
                     "color": color,
                     "area_ha": area_ha,
                     "date_t1": date_t1,
                     "date_t2": date_t2,
                     "hh_t1_db": m_hh1,
                     "hh_t2_db": m_hh2,
-                    "delta_hh_db": d_hh,
                     "hv_t1_db": m_hv1,
                     "hv_t2_db": m_hv2,
-                    "delta_hv_db": d_hv,
                     "rvi_t1": m_rvi1,
                     "rvi_t2": m_rvi2,
-                    "delta_rvi": d_rvi,
                     "explanation": explanation,
                     "timeseries": {
-                        "labels": [
-                            f"{date_t1} (t1)",
-                            "Cycle +12d",
-                            "Cycle +24d",
-                            f"{date_t2} (t2)",
-                        ],
-                        "hh_db": [m_hh1, mid_hh_1, mid_hh_2, m_hh2],
-                        "hv_db": [m_hv1, mid_hv_1, mid_hv_2, m_hv2],
-                        "rvi": [m_rvi1, mid_rvi_1, mid_rvi_2, m_rvi2],
+                        "labels": [f"Date 1 ({date_t1})", f"Date 2 ({date_t2})"],
+                        "hh_db": [m_hh1, m_hh2],
+                        "hv_db": [m_hv1, m_hv2],
+                        "rvi": [m_rvi1, m_rvi2],
                     },
                 },
                 "geometry": {
@@ -382,18 +249,17 @@ def generate_sector_parcels_geojson(
             })
             idx += 1
 
-    return features
+    return features, stats
 
 
-def encode_webp_base64(img: Image.Image, quality: int = 86) -> tuple[str, float]:
+def encode_webp_base64(img: Image.Image, quality: int = 84) -> tuple[str, float]:
     """
-    Encode an RGBA PIL Image purely in RAM as a WebP Base64 Data URI (0 disk writes).
+    Encode an RGBA PIL Image purely in RAM as a fast WebP Base64 Data URI (0 disk writes).
     Returns (data_uri, size_kb).
     """
     buf = io.BytesIO()
-    img.save(buf, format="WEBP", quality=quality, method=4)
+    img.save(buf, format="WEBP", quality=quality, method=1)
     raw_bytes = buf.getvalue()
     size_kb = round(len(raw_bytes) / 1024.0, 1)
     b64_str = base64.b64encode(raw_bytes).decode("ascii")
     return f"data:image/webp;base64,{b64_str}", size_kb
-

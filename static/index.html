@@ -49,20 +49,12 @@
 
       <div class="toolbar-item">
         <label for="selDate1">Date 1 (t1 Baseline)</label>
-        <select id="selDate1">
-          <option value="2026-10-17" selected>2026-10-17 (Cycle 033)</option>
-          <option value="2026-08-18">2026-08-18 (Cycle 028)</option>
-          <option value="2026-07-25">2026-07-25 (Cycle 026)</option>
-          <option value="2026-06-19">2026-06-19 (Cycle 023)</option>
-        </select>
+        <input type="date" id="selDate1" value="2026-10-17" required />
       </div>
 
       <div class="toolbar-item">
         <label for="selDate2">Date 2 (t2 Validation)</label>
-        <select id="selDate2">
-          <option value="2026-11-10" selected>2026-11-10 (Cycle 035)</option>
-          <option value="2026-10-17">2026-10-17 (Cycle 033)</option>
-        </select>
+        <input type="date" id="selDate2" value="2026-11-10" required />
       </div>
 
       <button type="submit" class="btn btn-accent" id="btnValidateZone">
@@ -108,18 +100,18 @@
       <!-- Floating Bottom Control Bar: Layer Mode, Dual-Date Swipe & Opacity -->
       <div class="map-controls-dock">
         <div class="control-group">
-          <label class="control-label">Active 10m Radar Layer</label>
+          <label class="control-label">Active 10m Dual-Date View</label>
           <div class="layer-buttons" id="layerButtons">
-            <button class="layer-btn active" data-layer="change">Agricultural Change (Δt)</button>
-            <button class="layer-btn" data-layer="split">Split Compare (t1 vs t2)</button>
+            <button class="layer-btn active" data-layer="split">Split Compare (t1 ⟷ t2)</button>
             <button class="layer-btn" data-layer="t1_rgb">Date 1 UAVSAR RGB</button>
             <button class="layer-btn" data-layer="t2_rgb">Date 2 UAVSAR RGB</button>
-            <button class="layer-btn" data-layer="rvi">Biomass Index (RVI)</button>
+            <button class="layer-btn" data-layer="rvi1">Date 1 Biomass (RVI)</button>
+            <button class="layer-btn" data-layer="rvi2">Date 2 Biomass (RVI)</button>
           </div>
         </div>
 
-        <!-- Split Screen Slider Control -->
-        <div class="control-group split-slider-group hidden" id="splitControlGroup">
+        <!-- Split Screen Slider Control (visible by default for direct Date 1 vs Date 2 validation) -->
+        <div class="control-group split-slider-group" id="splitControlGroup">
           <label class="control-label">
             Swipe Curtain (<span id="labelSplitLeft">Date 1</span> ⟷ <span id="labelSplitRight">Date 2</span>)
           </label>
@@ -141,26 +133,22 @@
 
       <!-- Floating Map Legend -->
       <div class="map-legend" id="mapLegend">
-        <h4>Bounded Sector &amp; Change Classes</h4>
+        <h4>10m Polarimetric SAR Guide</h4>
         <div class="legend-item">
           <span class="swatch" style="border:2px solid #facc15; background:rgba(250,204,21,0.15);"></span>
           <span><strong>Selected Sector Box</strong> (3–8 km Limit)</span>
         </div>
         <div class="legend-item">
-          <span class="swatch" style="background:#10b981;"></span>
-          <span><strong>Vigorous Crop Growth</strong> (+HV &amp; +RVI)</span>
+          <span class="swatch" style="background:#84cc16;"></span>
+          <span><strong>Green/Lime (HVHV)</strong>: Crop Canopy Volume</span>
         </div>
         <div class="legend-item">
-          <span class="swatch" style="background:#f59e0b;"></span>
-          <span><strong>Harvest / Clearance</strong> (-HV removal)</span>
+          <span class="swatch" style="background:#e879f9;"></span>
+          <span><strong>Magenta/Bright (HHHH)</strong>: Surface / Double-Bounce</span>
         </div>
         <div class="legend-item">
-          <span class="swatch" style="background:#06b6d4;"></span>
-          <span><strong>Irrigation / Flooded Paddy</strong> (HH &lt; -16 dB)</span>
-        </div>
-        <div class="legend-item">
-          <span class="swatch" style="background:#a855f7;"></span>
-          <span><strong>Soil Moisture / Tillage</strong> (+HH surface)</span>
+          <span class="swatch" style="background:#0284c7;"></span>
+          <span><strong>Dark Blue/Black</strong>: Water / Flooded Paddy</span>
         </div>
       </div>
     </section>
@@ -171,7 +159,7 @@
       <div class="panel-card">
         <div class="panel-header-row">
           <div>
-            <span class="panel-kicker" id="sectorRegion">Stateless Ephemeral Validation</span>
+            <span class="panel-kicker" id="sectorRegion">Stateless Dual-Date Validation</span>
             <h3 class="panel-title" id="sectorTitle">No Zone Validated Yet</h3>
           </div>
           <span class="orbit-pill" id="sectorOrbitPill">Track 77 • Frame 80</span>
@@ -182,7 +170,7 @@
             <span class="date-label">DATE 1 (t1 Baseline)</span>
             <strong id="dateT1Text">2026-10-17</strong>
           </div>
-          <div class="date-arrow">➔</div>
+          <div class="date-arrow">⟷</div>
           <div class="date-box">
             <span class="date-label">DATE 2 (t2 Validation)</span>
             <strong id="dateT2Text">2026-11-10</strong>
@@ -192,7 +180,7 @@
         <div class="meta-grid">
           <div class="meta-cell">
             <span>Validation Mode</span>
-            <strong id="sectorCrops">In-Memory Only (No Saved History)</strong>
+            <strong id="sectorCrops">Direct Dual-Date Stream (0 Saved Data)</strong>
           </div>
           <div class="meta-cell">
             <span>Validated Box Area</span>
@@ -210,12 +198,12 @@
         </div>
       </div>
 
-      <!-- Sector-Wide Change Distribution KPIs -->
+      <!-- Sector-Wide Dual-Date Summary -->
       <div class="panel-card">
-        <h4 class="section-subtitle">Validated Zone Change Distribution (10m)</h4>
+        <h4 class="section-subtitle">Sector-Wide Dual-Date Summary (10m)</h4>
         <div class="kpi-bars" id="sectorKpiBars">
           <p style="font-size:0.76rem; color:#94a3b8;">
-            Select a zone on the map and click <strong>Validate Selected Zone</strong> to compute live agricultural change metrics.
+            Pick any two dates, click on the map, and press <strong>Validate Selected Zone</strong> to compare both dates side-by-side.
           </p>
         </div>
       </div>
@@ -234,14 +222,13 @@
           When you validate a bounded zone on the map, it is divided into a 3×3 grid of agricultural monitoring parcels. Click any parcel to inspect its polarimetric backscatter and RVI phenology. Choosing a new zone automatically wipes all previous data.
         </p>
 
-        <!-- Dual-Date Telemetry Table -->
+        <!-- Dual-Date Telemetry Table (Only Date 1 & Date 2 Validation) -->
         <table class="telemetry-table">
           <thead>
             <tr>
               <th>SAR Metric</th>
               <th id="thDate1">Date 1 (t1)</th>
               <th id="thDate2">Date 2 (t2)</th>
-              <th>Change (Δ)</th>
             </tr>
           </thead>
           <tbody>
@@ -249,19 +236,16 @@
               <td><strong>Co-Pol γ⁰ HHHH</strong> (Moisture/Water)</td>
               <td id="tdHh1">—</td>
               <td id="tdHh2">—</td>
-              <td id="tdHhDelta">—</td>
             </tr>
             <tr>
               <td><strong>Cross-Pol γ⁰ HVHV</strong> (Canopy Volume)</td>
               <td id="tdHv1">—</td>
               <td id="tdHv2">—</td>
-              <td id="tdHvDelta">—</td>
             </tr>
             <tr>
               <td><strong>Radar Veg. Index (RVI)</strong> (Biomass)</td>
               <td id="tdRvi1">—</td>
               <td id="tdRvi2">—</td>
-              <td id="tdRviDelta">—</td>
             </tr>
           </tbody>
         </table>

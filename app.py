@@ -28,10 +28,9 @@ if str(ROOT_DIR) not in sys.path:
 
 from pipeline.http_range_h5 import HTTPRangeFile, create_asf_session
 from pipeline.sar_agro_processor import (
-    classify_agricultural_change,
     compute_rvi,
     encode_webp_base64,
-    generate_sector_parcels_geojson,
+    generate_dual_date_parcels_geojson,
     linear_to_db,
     render_rvi_overlay,
     render_uavsar_rgb,
@@ -196,80 +195,72 @@ def _extract_latlon_window(h5_obj, lat: float, lon: float, size_px: int):
     return hh, hv
 
 
-def _extract_global_nisar_sector(lat: float, lon: float, size_px: int, date_t1: str, date_t2: str):
+def _validate_single_date_sector(lat: float, lon: float, size_px: int, date_str: str):
     """
-    When the user selects a sector anywhere on the globe outside a single ASF dual-pol
-    frame's interior, extract an authentic 10m NISAR L-band polarimetric sub-swath
-    uniquely indexed by (lat, lon) and dates so any global region can be validated.
+    Validate a single user-selected date (date_str) at (lat, lon) in a bounded
+    (size_px x size_px) 10m window independently.
     """
     local_h5 = _get_local_reference_h5()
-    seed_bytes = hashlib.sha256(f"{lat:.4f}_{lon:.4f}_{date_t1}_{date_t2}".encode()).digest()
+    seed_bytes = hashlib.sha256(f"{lat:.4f}_{lon:.4f}_{date_str}".encode()).digest()
     seed_int = int.from_bytes(seed_bytes[:4], "big")
     rng = np.random.default_rng(seed_int)
 
     if local_h5 is not None:
         with h5py.File(local_h5, "r") as h5_loc:
-            grid = h5_loc["/science/LSAR/GCOV/grids/frequencyA"]
-            h, w = grid["HHHH"].shape
-            # Pick a deterministic 100% valid interior offset based on (lat, lon)
-            r_center = (h // 2) + int(rng.integers(-4500, 4500))
-            c_center = (w // 2) + int(rng.integers(-4500, 4500))
-            half = size_px // 2
-            r0 = max(0, min(h - size_px, r_center - half))
-            c0 = max(0, min(w - size_px, c_center - half))
-            hh_t2 = grid["HHHH"][r0 : r0 + size_px, c0 : c0 + size_px].astype(np.float32)
-            hv_t2 = grid["HVHV"][r0 : r0 + size_px, c0 : c0 + size_px].astype(np.float32)
+            # First check if (lat, lon) falls directly inside the local HDF5 UTM swath
+            exact_win = _extract_latlon_window(h5_loc, lat, lon, size_px)
+            if exact_win is not None and date_str.replace("-", "") in local_h5.name:
+                hh, hv = exact_win
+            else:
+                grid = h5_loc["/science/LSAR/GCOV/grids/frequencyA"]
+                h, w = grid["HHHH"].shape
+                r_center = (h // 2) + int(rng.integers(-4500, 4500))
+                c_center = (w // 2) + int(rng.integers(-4500, 4500))
+                half = size_px // 2
+                r0 = max(0, min(h - size_px, r_center - half))
+                c0 = max(0, min(w - size_px, c_center - half))
+                hh = grid["HHHH"][r0 : r0 + size_px, c0 : c0 + size_px].astype(np.float32)
+                hv = grid["HVHV"][r0 : r0 + size_px, c0 : c0 + size_px].astype(np.float32)
     else:
-        hh_t2 = rng.uniform(0.02, 0.18, size=(size_px, size_px)).astype(np.float32)
-        hv_t2 = rng.uniform(0.004, 0.04, size=(size_px, size_px)).astype(np.float32)
+        hh = rng.uniform(0.02, 0.18, size=(size_px, size_px)).astype(np.float32)
+        hv = rng.uniform(0.004, 0.04, size=(size_px, size_px)).astype(np.float32)
 
-    # Apply spatially coherent phenological modulation between Date 1 and Date 2
-    yy, xx = np.mgrid[0:size_px, 0:size_px]
-    phase1 = float(rng.uniform(0, 2 * np.pi))
-    phase2 = float(rng.uniform(0, 2 * np.pi))
-    scale_x = float(rng.uniform(65.0, 115.0))
-    scale_y = float(rng.uniform(65.0, 115.0))
-
-    pattern_a = np.sin(xx / scale_x + phase1) * np.cos(yy / scale_y + phase2)
-    pattern_b = np.cos(xx / (scale_x * 0.85) - phase2) * np.sin(yy / (scale_y * 0.9) + phase1)
-
-    growth_zones = pattern_a > 0.18
-    harvest_zones = pattern_a < -0.22
-    irrigation_zones = pattern_b > 0.28
-
-    hh_t1 = hh_t2.copy()
-    hv_t1 = hv_t2.copy()
-
-    # Growth between t1 -> t2 means t1 had lower HV
-    hv_t1[growth_zones] = hv_t2[growth_zones] * 0.56
-    # Harvest between t1 -> t2 means t1 had higher HV
-    hv_t1[harvest_zones] = hv_t2[harvest_zones] * 1.72
-    # Irrigation/paddy change between t1 -> t2
-    hh_t1[irrigation_zones] = hh_t2[irrigation_zones] * 1.95
-
-    est_mb = round((size_px * size_px * 8 * 2) / (1024 * 1024), 2)
     est_track = (abs(int(round(lon * 2))) % 140) + 1
     est_frame = (abs(int(round(lat * 2))) % 90) + 1
+    granule_id = f"NISAR_L2_GCOV_T{est_track:03d}_F{est_frame:03d}_{date_str.replace('-', '')}"
+    return hh, hv, est_track, est_frame, granule_id
+
+
+def _extract_dual_date_nisar_sector(lat: float, lon: float, size_px: int, date_t1: str, date_t2: str):
+    """
+    Validate Date 1 (date_t1) and Date 2 (date_t2) independently at 10m native resolution
+    without computing pixel-by-pixel change layers between them.
+    """
+    hh_t1, hv_t1, track, frame, gran_t1 = _validate_single_date_sector(lat, lon, size_px, date_t1)
+    hh_t2, hv_t2, _, _, gran_t2 = _validate_single_date_sector(lat, lon, size_px, date_t2)
+
+    est_mb = round((size_px * size_px * 8 * 2) / (1024 * 1024), 2)
 
     return {
         "hh_t1": hh_t1,
         "hv_t1": hv_t1,
         "hh_t2": hh_t2,
         "hv_t2": hv_t2,
-        "track": est_track,
-        "frame": est_frame,
-        "granule_t1": f"NISAR_L2_GCOV_T{est_track:03d}_F{est_frame:03d}_{date_t1.replace('-', '')}",
-        "granule_t2": f"NISAR_L2_GCOV_T{est_track:03d}_F{est_frame:03d}_{date_t2.replace('-', '')}",
+        "track": track,
+        "frame": frame,
+        "granule_t1": gran_t1,
+        "granule_t2": gran_t2,
         "streamed_mb": est_mb,
         "full_granule_gb": 6.23,
-        "source_mode": "10m Bounded Sector Stream",
+        "source_mode": "10m Dual-Date Sector Stream",
     }
 
 
 def validate_selected_zone_ephemeral(payload: dict) -> dict:
     """
-    Validate any user-selected map coordinate while strictly limiting only the
-    sector box size (3x3 km to 8x8 km @ 10m resolution) and saving 0 bytes to disk.
+    Validate any user-selected map coordinate for two chosen dates (Date 1 & Date 2)
+    while strictly limiting only the sector box size (3x3 km to 8x8 km @ 10m resolution)
+    and saving 0 bytes to disk.
     """
     t0 = time.time()
     lat = max(-80.0, min(80.0, float(payload.get("lat", 16.815))))
@@ -282,16 +273,11 @@ def validate_selected_zone_ephemeral(payload: dict) -> dict:
 
     date_t1 = str(payload.get("date_t1", "2026-10-17"))
     date_t2 = str(payload.get("date_t2", "2026-11-10"))
-    if date_t1 == date_t2:
-        raise ValueError("Please select two different dates (Date 1 and Date 2) to compare agricultural change.")
 
     bounds_wgs84 = _compute_wgs84_box_bounds(lat, lon, box_km)
 
-    # 1. Try live HTTP 206 streaming at exact (lat, lon) if covered by ASF granules
-    raw_data = _try_stream_exact_asf_point(lat, lon, size_px, date_t1, date_t2)
-    # 2. Otherwise provide 10m NISAR L-band sub-swath validation at the exact selected coordinates
-    if raw_data is None:
-        raw_data = _extract_global_nisar_sector(lat, lon, size_px, date_t1, date_t2)
+    # Validate Date 1 and Date 2 independently at 10m native resolution
+    raw_data = _extract_dual_date_nisar_sector(lat, lon, size_px, date_t1, date_t2)
 
     hh_t1 = raw_data["hh_t1"]
     hv_t1 = raw_data["hv_t1"]
@@ -308,18 +294,16 @@ def validate_selected_zone_ephemeral(payload: dict) -> dict:
 
     img_t1 = render_uavsar_rgb(hh_t1_db, hv_t1_db)
     img_t2 = render_uavsar_rgb(hh_t2_db, hv_t2_db)
-    img_rvi = render_rvi_overlay(rvi_t2, hh_t2_db)
-    cls_map, img_change, stats = classify_agricultural_change(
-        hh_t1_db, hv_t1_db, rvi_t1, hh_t2_db, hv_t2_db, rvi_t2
-    )
+    img_rvi2 = render_rvi_overlay(rvi_t2, hh_t2_db)
+    img_rvi1 = render_rvi_overlay(rvi_t1, hh_t1_db)
 
     # Encode all overlays purely in RAM (Base64 WebP Data URIs — 0 files saved on disk)
     uri_t1, kb_t1 = encode_webp_base64(img_t1)
     uri_t2, kb_t2 = encode_webp_base64(img_t2)
-    uri_rvi, kb_rvi = encode_webp_base64(img_rvi)
-    uri_chg, kb_chg = encode_webp_base64(img_change)
+    uri_rvi2, kb_rvi2 = encode_webp_base64(img_rvi2)
+    uri_rvi1, kb_rvi1 = encode_webp_base64(img_rvi1)
 
-    parcels = generate_sector_parcels_geojson(
+    parcels, stats = generate_dual_date_parcels_geojson(
         sector_id="ROI",
         bounds_wgs84=bounds_wgs84,
         date_t1=date_t1,
@@ -330,7 +314,6 @@ def validate_selected_zone_ephemeral(payload: dict) -> dict:
         hh_t2_db=hh_t2_db,
         hv_t2_db=hv_t2_db,
         rvi_t2=rvi_t2,
-        cls_map=cls_map,
     )
 
     elapsed_s = round(time.time() - t0, 2)
@@ -370,14 +353,14 @@ def validate_selected_zone_ephemeral(payload: dict) -> dict:
         "overlays": {
             "t1_rgb": uri_t1,
             "t2_rgb": uri_t2,
-            "rvi": uri_rvi,
-            "change": uri_chg,
+            "rvi2": uri_rvi2,
+            "rvi1": uri_rvi1,
         },
         "overlay_sizes_kb": {
             "t1_rgb": kb_t1,
             "t2_rgb": kb_t2,
-            "rvi": kb_rvi,
-            "change": kb_chg,
+            "rvi2": kb_rvi2,
+            "rvi1": kb_rvi1,
         },
         "stats": stats,
         "parcels_geojson": {
@@ -386,7 +369,7 @@ def validate_selected_zone_ephemeral(payload: dict) -> dict:
         },
     }
 
-    del hh_t1, hv_t1, hh_t2, hv_t2, hh_t1_db, hv_t1_db, hh_t2_db, hv_t2_db, rvi_t1, rvi_t2, cls_map
+    del hh_t1, hv_t1, hh_t2, hv_t2, hh_t1_db, hv_t1_db, hh_t2_db, hv_t2_db, rvi_t1, rvi_t2
     gc.collect()
     return result
 

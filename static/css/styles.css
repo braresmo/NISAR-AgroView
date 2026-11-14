@@ -98,7 +98,8 @@ body {
   font-weight: 700;
 }
 
-.toolbar-item select {
+.toolbar-item select,
+.toolbar-item input[type="date"] {
   background: #091020;
   border: 1px solid var(--border-subtle);
   color: #f8fafc;
@@ -107,6 +108,7 @@ body {
   padding: 4px 8px;
   border-radius: 6px;
   cursor: pointer;
+  color-scheme: dark;
 }
 
 .coord-readout {
