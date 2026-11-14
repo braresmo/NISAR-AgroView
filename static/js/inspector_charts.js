@@ -55,10 +55,9 @@ class FieldInspectorCharts {
       "Click any agricultural monitoring block inside the validated sector to inspect its polarimetric backscatter and RVI phenology. Choosing a new zone automatically wipes all previous data.";
     expl.style.borderLeftColor = "#10b981";
 
-    ["tdHh1", "tdHh2", "tdHv1", "tdHv2", "tdRvi1", "tdRvi2"].forEach(
+    ["tdHh1", "tdHh2", "tdHhDelta", "tdHv1", "tdHv2", "tdHvDelta", "tdRvi1", "tdRvi2", "tdRviDelta"].forEach(
       (id) => {
-        const el = document.getElementById(id);
-        if (el) el.textContent = "—";
+        document.getElementById(id).textContent = "—";
       }
     );
   }
@@ -99,29 +98,51 @@ class FieldInspectorCharts {
 
     const kpiContainer = document.getElementById("sectorKpiBars");
     const st = sector.stats;
-    const rvi1Pct = Math.round(Math.min(100, Math.max(5, st.mean_rvi_t1 * 100)));
-    const rvi2Pct = Math.round(Math.min(100, Math.max(5, st.mean_rvi_t2 * 100)));
+    const items = [
+      {
+        label: "Vigorous Crop Growth (+HV / +RVI)",
+        pct: st.crop_growth_pct,
+        ha: st.crop_growth_ha,
+        color: "#10b981",
+      },
+      {
+        label: "Harvest / Canopy Clearance (-HV)",
+        pct: st.harvest_pct,
+        ha: st.harvest_ha,
+        color: "#f59e0b",
+      },
+      {
+        label: "Irrigation / Flooded Paddy (Specular HH)",
+        pct: st.irrigation_water_pct,
+        ha: st.irrigation_water_ha,
+        color: "#06b6d4",
+      },
+      {
+        label: "Soil Moisture / Tillage Increase (+HH)",
+        pct: st.soil_moisture_pct,
+        ha: st.soil_moisture_ha,
+        color: "#a855f7",
+      },
+    ];
 
-    kpiContainer.innerHTML = `
+    kpiContainer.innerHTML = items
+      .map(
+        (it) => `
       <div class="kpi-row">
         <div class="kpi-top">
-          <span>Date 1 (${sector.date_t1}) Mean RVI / Backscatter</span>
-          <strong>RVI ${st.mean_rvi_t1} | HH ${st.mean_hh_t1_db} dB | HV ${st.mean_hv_t1_db} dB</strong>
+          <span>${it.label}</span>
+          <strong>${it.pct}% (${it.ha.toLocaleString()} ha)</strong>
         </div>
         <div class="kpi-bar-bg">
-          <div class="kpi-bar-fill" style="width:${rvi1Pct}%; background:#38bdf8;"></div>
+          <div class="kpi-bar-fill" style="width:${Math.min(
+            100,
+            it.pct * 1.8
+          )}%; background:${it.color};"></div>
         </div>
       </div>
-      <div class="kpi-row">
-        <div class="kpi-top">
-          <span>Date 2 (${sector.date_t2}) Mean RVI / Backscatter</span>
-          <strong>RVI ${st.mean_rvi_t2} | HH ${st.mean_hh_t2_db} dB | HV ${st.mean_hv_t2_db} dB</strong>
-        </div>
-        <div class="kpi-bar-bg">
-          <div class="kpi-bar-fill" style="width:${rvi2Pct}%; background:#10b981;"></div>
-        </div>
-      </div>
-    `;
+    `
+      )
+      .join("");
   }
 
   updateParcel(parcelProps) {
@@ -140,14 +161,27 @@ class FieldInspectorCharts {
     expl.textContent = parcelProps.explanation;
     expl.style.borderLeftColor = parcelProps.color;
 
+    const fmtDelta = (v, unit = "") => `${v > 0 ? "+" : ""}${v}${unit}`;
+
     document.getElementById("tdHh1").textContent = `${parcelProps.hh_t1_db} dB`;
     document.getElementById("tdHh2").textContent = `${parcelProps.hh_t2_db} dB`;
+    document.getElementById("tdHhDelta").textContent = fmtDelta(
+      parcelProps.delta_hh_db,
+      " dB"
+    );
 
     document.getElementById("tdHv1").textContent = `${parcelProps.hv_t1_db} dB`;
     document.getElementById("tdHv2").textContent = `${parcelProps.hv_t2_db} dB`;
+    document.getElementById("tdHvDelta").textContent = fmtDelta(
+      parcelProps.delta_hv_db,
+      " dB"
+    );
 
     document.getElementById("tdRvi1").textContent = parcelProps.rvi_t1;
     document.getElementById("tdRvi2").textContent = parcelProps.rvi_t2;
+    document.getElementById("tdRviDelta").textContent = fmtDelta(
+      parcelProps.delta_rvi
+    );
 
     this._renderChart();
   }
@@ -176,17 +210,19 @@ class FieldInspectorCharts {
           label: "Co-Pol HHHH (dB) — Water / Moisture",
           data: ts.hh_db,
           borderColor: "#38bdf8",
-          backgroundColor: "rgba(56, 189, 248, 0.55)",
-          borderWidth: 1.5,
-          borderRadius: 4,
+          backgroundColor: "rgba(56, 189, 248, 0.15)",
+          borderWidth: 2.5,
+          tension: 0.3,
+          pointRadius: 4,
         },
         {
           label: "Cross-Pol HVHV (dB) — Crop Volume",
           data: ts.hv_db,
           borderColor: "#10b981",
-          backgroundColor: "rgba(16, 185, 129, 0.55)",
-          borderWidth: 1.5,
-          borderRadius: 4,
+          backgroundColor: "rgba(16, 185, 129, 0.15)",
+          borderWidth: 2.5,
+          tension: 0.3,
+          pointRadius: 4,
         },
       ];
     } else {
@@ -196,15 +232,17 @@ class FieldInspectorCharts {
           label: "Dual-Pol Radar Vegetation Index (RVI)",
           data: ts.rvi,
           borderColor: "#34d399",
-          backgroundColor: ["rgba(56, 189, 248, 0.55)", "rgba(16, 185, 129, 0.55)"],
-          borderWidth: 1.5,
-          borderRadius: 4,
+          backgroundColor: "rgba(52, 211, 153, 0.22)",
+          fill: true,
+          borderWidth: 2.5,
+          tension: 0.3,
+          pointRadius: 4,
         },
       ];
     }
 
     this.chartInstance = new Chart(ctx, {
-      type: "bar",
+      type: "line",
       data: {
         labels: ts.labels,
         datasets: datasets,
