@@ -93,8 +93,8 @@ document.addEventListener("DOMContentLoaded", async () => {
         }
 
         const sector = data.sector;
-        inspector.renderSectorSummary(sector);
         mapCtrl.loadValidatedSector(sector);
+        inspector.renderSectorSummary(sector);
       } catch (err) {
         document.getElementById("statusBadge").textContent = "Validation Error";
         document.getElementById("sectorHeadline").textContent =
