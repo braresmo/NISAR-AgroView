@@ -168,6 +168,16 @@ document.addEventListener("DOMContentLoaded", async () => {
       // Keep existing validated sector data & photos completely intact until user validates the new zone
       if (!mapCtrl.activeSector) {
         refreshAllPreviews();
+      } else {
+        // Real-time in-system guidance: current data stays locked until Validate Zone is clicked
+        const statusBanner = document.getElementById("dataStatusBanner");
+        const statusText = document.getElementById("dataStatusText");
+        const btnVal = document.getElementById("btnValidateZone");
+        if (statusBanner) statusBanner.classList.add("target-pending");
+        if (statusText) {
+          statusText.innerHTML = `⚡ Target moved: <strong>${lat.toFixed(4)}°N, ${lon.toFixed(4)}°E</strong>. Current data remains locked until you click <strong>Validate Zone</strong>.`;
+        }
+        if (btnVal) btnVal.classList.add("btn-validate-pulse");
       }
     },
     onParcelSelected: (parcelProps) => {
@@ -175,6 +185,14 @@ document.addEventListener("DOMContentLoaded", async () => {
     },
     onCleared: () => {
       inspector.clearInspector();
+      const statusBanner = document.getElementById("dataStatusBanner");
+      const statusText = document.getElementById("dataStatusText");
+      const btnVal = document.getElementById("btnValidateZone");
+      if (statusBanner) statusBanner.classList.remove("target-pending");
+      if (statusText) {
+        statusText.innerHTML = `Target selection won't overwrite data. Click <strong>Validate Zone</strong> to update.`;
+      }
+      if (btnVal) btnVal.classList.remove("btn-validate-pulse");
     },
   });
 
@@ -221,6 +239,17 @@ document.addEventListener("DOMContentLoaded", async () => {
     });
   }
 
+  // Collapsible sidebar panel cards
+  document.querySelectorAll(".btn-card-toggle").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const card = btn.closest(".panel-card") || btn.closest(".sidebar-description-card");
+      if (card) {
+        card.classList.toggle("collapsed");
+      }
+    });
+  });
+
   // Load Allowed Search Zone metadata from backend
   try {
     const resp = await fetch("/api/search-zone");
@@ -260,6 +289,14 @@ document.addEventListener("DOMContentLoaded", async () => {
 
       // Immediately clear any previous validation before requesting the new zone
       mapCtrl.clearActiveValidation();
+
+      const statusBanner = document.getElementById("dataStatusBanner");
+      const statusText = document.getElementById("dataStatusText");
+      if (statusBanner) statusBanner.classList.remove("target-pending");
+      btnValidate.classList.remove("btn-validate-pulse");
+      if (statusText) {
+        statusText.innerHTML = `🔄 Streaming 10m polarimetric chunks for new zone...`;
+      }
 
       loadingBanner.classList.remove("hidden");
       loadingText.textContent = `Streaming ${mapCtrl.selectedBoxKm}×${mapCtrl.selectedBoxKm} km @ 10m (${d1} vs ${d2}) via HTTP 206 Range Requests...`;
@@ -321,11 +358,17 @@ document.addEventListener("DOMContentLoaded", async () => {
         updateDateLabels(d1, d2);
         mapCtrl.loadValidatedSector(sector);
         inspector.renderSectorSummary(sector);
+        if (statusText) {
+          statusText.innerHTML = `🔒 Active analysis: <strong>${sector.name}</strong> (${sector.box_km}×${sector.box_km} km). Select a new target anytime.`;
+        }
       } catch (err) {
         document.getElementById("statusBadge").textContent = "Validation Error";
         document.getElementById("sectorHeadline").textContent =
           "Could Not Stream Selected Zone";
         document.getElementById("sectorStoryText").textContent = err.message;
+        if (statusText) {
+          statusText.innerHTML = `⚠️ Validation error. Select target and click <strong>Validate Zone</strong> to retry.`;
+        }
       } finally {
         loadingBanner.classList.add("hidden");
         btnValidate.disabled = false;

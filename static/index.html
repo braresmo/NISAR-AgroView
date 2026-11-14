@@ -24,7 +24,11 @@
   <!-- Top Navigation & Zone Validation Toolbar -->
   <header class="topbar">
     <div class="brand-group">
-      <div class="brand-badge">NASA-ISRO SAR</div>
+      <div class="brand-badge">NASA-ISRO</div>
+      <div class="live-beacon" title="NISAR L-band &amp; S-band In-Memory Streaming Active">
+        <span class="beacon-dot"></span>
+        <span>STREAM</span>
+      </div>
       <div>
         <h1 class="brand-title">NISAR AgroView</h1>
         <p class="brand-subtitle">Click Anywhere on the Map → Compare Bounded Sector (3–8 km) Across 2 Dates</p>
@@ -34,31 +38,31 @@
     <!-- Map Selection & Dual-Date Validation Controls -->
     <form class="validation-toolbar" id="validationToolbar">
       <div class="toolbar-item">
-        <label>Selected Map Target</label>
+        <label>Target</label>
         <span class="coord-readout" id="coordReadout">16.815°N, 78.705°E</span>
       </div>
 
       <div class="toolbar-item">
-        <label for="selBoxKm">Bounded Box Limit</label>
+        <label for="selBoxKm">Sector Limit</label>
         <select id="selBoxKm">
-          <option value="3">3×3 km (900 ha • Ultra-Lite)</option>
-          <option value="5" selected>5×5 km (2,500 ha • Recommended)</option>
-          <option value="8">8×8 km (6,400 ha • Max Allowed)</option>
+          <option value="3">3×3 km</option>
+          <option value="5" selected>5×5 km</option>
+          <option value="8">8×8 km</option>
         </select>
       </div>
 
       <div class="toolbar-item">
-        <label for="selDate1">Date 1 (t1 Baseline)</label>
+        <label for="selDate1">Date 1 (t1)</label>
         <input type="date" id="selDate1" value="2026-10-17" required />
       </div>
 
       <div class="toolbar-item">
-        <label for="selDate2">Date 2 (t2 Validation)</label>
+        <label for="selDate2">Date 2 (t2)</label>
         <input type="date" id="selDate2" value="2026-11-10" required />
       </div>
 
       <button type="submit" class="btn btn-accent" id="btnValidateZone">
-        🔍 Validate Selected Zone
+        🔍 Validate Zone
       </button>
 
       <button type="button" class="btn btn-outline" id="btnClearZone" title="Wipe current validation from memory">
@@ -68,7 +72,7 @@
 
     <div class="header-actions">
       <button class="btn btn-outline" id="btnOpenNasaHub">
-        <span>🛰️ About &amp; NASA Resources</span>
+        <span>🛰️ NASA Resources</span>
       </button>
     </div>
   </header>
@@ -92,6 +96,18 @@
         <p id="sectorStoryText">
           Navigate anywhere on the Google Satellite world map and click to place your bounded validation sector (limited to 3×3 km, 5×5 km, or 8×8 km so only small data blocks are processed). Then click <strong>Validate Selected Zone</strong> to compare two dates in memory with zero saved data.
         </p>
+
+        <!-- In-System Data Update Lifecycle Guide -->
+        <div class="data-lifecycle-guide">
+          <div class="guide-title">
+            <span class="guide-icon">💡</span>
+            <span>How &amp; When Does Data Update?</span>
+          </div>
+          <div class="guide-body">
+            <div><span class="guide-step-tag">1. Moving Selection:</span> Your current map overlays, charts, and telemetry stay <strong>safely locked on screen</strong> while you click new targets.</div>
+            <div><span class="guide-step-tag">2. Validate Zone:</span> Clicking <strong>🔍 Validate Zone</strong> wipes the previous data and streams the new 10m SAR analysis into memory.</div>
+          </div>
+        </div>
       </div>
 
       <!-- Floating Button to Re-Open Story Card when closed -->
@@ -216,144 +232,168 @@
       <div class="sidebar-description-card" id="sidebarDescriptionCard">
         <div class="sidebar-desc-header">
           <span class="desc-tag">Sector Description &amp; Story</span>
-          <span class="desc-mode-badge" id="sidebarDescBadge">Ready</span>
+          <div style="display:flex; align-items:center; gap:6px;">
+            <span class="desc-mode-badge" id="sidebarDescBadge">Ready</span>
+            <button type="button" class="btn-card-toggle" data-toggle="descCardBody" title="Toggle section" aria-label="Toggle section">▾</button>
+          </div>
         </div>
-        <h4 class="sidebar-story-headline" id="sidebarHeadline">Click Anywhere on Map to Place Validation Sector</h4>
-        <p class="sidebar-story-body" id="sidebarStoryText">
-          Navigate anywhere on the Google Satellite world map and click to place your bounded validation sector (limited to 3×3 km, 5×5 km, or 8×8 km). Select two dates and click Validate Selected Zone to compare both dates in memory with zero saved data.
-        </p>
+        <div id="descCardBody" class="panel-collapsible-body">
+          <h4 class="sidebar-story-headline" id="sidebarHeadline">Click Anywhere on Map to Place Validation Sector</h4>
+          <p class="sidebar-story-body" id="sidebarStoryText">
+            Navigate anywhere on the Google Satellite world map and click to place your bounded validation sector (limited to 3×3 km, 5×5 km, or 8×8 km). Select two dates and click Validate Zone to compare both dates in memory with zero saved data.
+          </p>
+          <div class="data-status-banner" id="dataStatusBanner">
+            <span class="status-icon">🔒</span>
+            <span id="dataStatusText">Target selection won't overwrite data. Click <strong>Validate Zone</strong> to update.</span>
+          </div>
+        </div>
       </div>
 
       <!-- Sector Metadata & NASA Deep Links -->
-      <div class="panel-card">
+      <div class="panel-card" id="cardSectorMeta">
         <div class="panel-header-row">
           <div>
             <span class="panel-kicker" id="sectorRegion">Stateless Ephemeral Validation</span>
             <h3 class="panel-title" id="sectorTitle">No Zone Validated Yet</h3>
           </div>
-          <span class="orbit-pill" id="sectorOrbitPill">Track 77 • Frame 80</span>
+          <div style="display:flex; align-items:center; gap:6px;">
+            <span class="orbit-pill" id="sectorOrbitPill">Track 77 • Frame 80</span>
+            <button type="button" class="btn-card-toggle" data-toggle="metaCardBody" title="Toggle section" aria-label="Toggle section">▾</button>
+          </div>
         </div>
 
-        <div class="dates-comparison-banner">
-          <div class="date-box">
-            <span class="date-label">DATE 1 (t1 Baseline)</span>
-            <strong id="dateT1Text">2026-10-17</strong>
-            <div class="dash-photo-box" id="dashPhotoBox1" title="Click to view Date 1 SAR photo">
-              <img id="dashPhotoImg1" src="" alt="Date 1 Preview" class="dash-thumb-img hidden" />
-              <div class="dash-thumb-placeholder" id="dashPhotoPlaceholder1">
-                <span>📷 Preview</span>
+        <div id="metaCardBody" class="panel-collapsible-body">
+          <div class="dates-comparison-banner">
+            <div class="date-box">
+              <span class="date-label">DATE 1 (t1 Baseline)</span>
+              <strong id="dateT1Text">2026-10-17</strong>
+              <div class="dash-photo-box" id="dashPhotoBox1" title="Click to view Date 1 SAR photo">
+                <img id="dashPhotoImg1" src="" alt="Date 1 Preview" class="dash-thumb-img hidden" />
+                <div class="dash-thumb-placeholder" id="dashPhotoPlaceholder1">
+                  <span>📷 Preview</span>
+                </div>
+              </div>
+            </div>
+            <div class="date-arrow">➔</div>
+            <div class="date-box">
+              <span class="date-label">DATE 2 (t2 Validation)</span>
+              <strong id="dateT2Text">2026-11-10</strong>
+              <div class="dash-photo-box" id="dashPhotoBox2" title="Click to view Date 2 SAR photo">
+                <img id="dashPhotoImg2" src="" alt="Date 2 Preview" class="dash-thumb-img hidden" />
+                <div class="dash-thumb-placeholder" id="dashPhotoPlaceholder2">
+                  <span>📷 Preview</span>
+                </div>
               </div>
             </div>
           </div>
-          <div class="date-arrow">➔</div>
-          <div class="date-box">
-            <span class="date-label">DATE 2 (t2 Validation)</span>
-            <strong id="dateT2Text">2026-11-10</strong>
-            <div class="dash-photo-box" id="dashPhotoBox2" title="Click to view Date 2 SAR photo">
-              <img id="dashPhotoImg2" src="" alt="Date 2 Preview" class="dash-thumb-img hidden" />
-              <div class="dash-thumb-placeholder" id="dashPhotoPlaceholder2">
-                <span>📷 Preview</span>
-              </div>
+
+          <div class="meta-grid">
+            <div class="meta-cell">
+              <span>Validation Mode</span>
+              <strong id="sectorCrops">In-Memory Only (No Saved History)</strong>
+            </div>
+            <div class="meta-cell">
+              <span>Validated Box Area</span>
+              <strong id="sectorValidHa">Click "Validate Selected Zone"</strong>
             </div>
           </div>
-        </div>
 
-        <div class="meta-grid">
-          <div class="meta-cell">
-            <span>Validation Mode</span>
-            <strong id="sectorCrops">In-Memory Only (No Saved History)</strong>
+          <div class="external-links-row">
+            <a id="linkAsfVertex" href="https://search.asf.alaska.edu/#/?dataset=NISAR&relativeOrbit=77&frame=80" target="_blank" rel="noopener" class="ext-link">
+              🔎 Open in ASF Vertex
+            </a>
+            <a id="linkEarthdata" href="https://search.earthdata.nasa.gov/search?q=NISAR_L2_GCOV&lat=16.815&long=78.705&zoom=10" target="_blank" rel="noopener" class="ext-link">
+              🌍 NASA Earthdata Search
+            </a>
           </div>
-          <div class="meta-cell">
-            <span>Validated Box Area</span>
-            <strong id="sectorValidHa">Click "Validate Selected Zone"</strong>
-          </div>
-        </div>
-
-        <div class="external-links-row">
-          <a id="linkAsfVertex" href="https://search.asf.alaska.edu/#/?dataset=NISAR&relativeOrbit=77&frame=80" target="_blank" rel="noopener" class="ext-link">
-            🔎 Open in ASF Vertex
-          </a>
-          <a id="linkEarthdata" href="https://search.earthdata.nasa.gov/search?q=NISAR_L2_GCOV&lat=16.815&long=78.705&zoom=10" target="_blank" rel="noopener" class="ext-link">
-            🌍 NASA Earthdata Search
-          </a>
         </div>
       </div>
 
       <!-- Sector-Wide Change Distribution KPIs -->
-      <div class="panel-card">
+      <div class="panel-card" id="cardSectorKpi">
         <div class="panel-header-row">
           <h4 class="section-subtitle">Validated Zone Change Distribution (10m)</h4>
-          <span class="badge-subtle">Comparative Columns</span>
+          <div style="display:flex; align-items:center; gap:6px;">
+            <span class="badge-subtle">Comparative Columns</span>
+            <button type="button" class="btn-card-toggle" data-toggle="kpiCardBody" title="Toggle section" aria-label="Toggle section">▾</button>
+          </div>
         </div>
-        <div class="kpi-bars" id="sectorKpiBars">
-          <p style="font-size:0.76rem; color:#94a3b8;">
-            Select a zone on the map and click <strong>Validate Selected Zone</strong> to compute live agricultural change metrics.
-          </p>
+        <div id="kpiCardBody" class="panel-collapsible-body">
+          <div class="kpi-bars" id="sectorKpiBars">
+            <p style="font-size:0.76rem; color:#94a3b8;">
+              Select a zone on the map and click <strong>Validate Selected Zone</strong> to compute live agricultural change metrics.
+            </p>
+          </div>
+          <div id="sectorColumnsSummary" class="sector-columns-summary"></div>
         </div>
-        <div id="sectorColumnsSummary" class="sector-columns-summary"></div>
       </div>
 
       <!-- Interactive Field Parcel Inspector -->
-      <div class="panel-card highlight-card">
+      <div class="panel-card highlight-card" id="cardParcelInspector">
         <div class="panel-header-row">
           <div>
             <span class="panel-kicker">Interactive Field Inspector (Click Map Parcel)</span>
             <h3 class="panel-title" id="parcelTitle">Awaiting Zone Validation</h3>
           </div>
-          <span class="class-badge" id="parcelBadge">Standby</span>
-        </div>
-
-        <p class="parcel-explanation" id="parcelExplanation">
-          When you validate a bounded zone on the map, it is divided into a 3×3 grid of agricultural monitoring parcels. Click any parcel to inspect its polarimetric backscatter and RVI phenology. Choosing a new zone automatically wipes all previous data.
-        </p>
-
-        <!-- Dual-Date Telemetry Table With Columns Showing Data Changes -->
-        <div class="table-responsive">
-          <table class="telemetry-table">
-            <thead>
-              <tr>
-                <th>SAR Metric</th>
-                <th id="thDate1">Date 1 (t1)</th>
-                <th id="thDate2">Date 2 (t2)</th>
-                <th>Net Change (Δ)</th>
-                <th>Trend / Dynamics</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td><strong>Co-Pol γ⁰ HHHH</strong><div class="metric-sub">Water / Moisture</div></td>
-                <td id="tdHh1">—</td>
-                <td id="tdHh2">—</td>
-                <td id="tdHhDiff">—</td>
-                <td id="tdHhTrend">—</td>
-              </tr>
-              <tr>
-                <td><strong>Cross-Pol γ⁰ HVHV</strong><div class="metric-sub">Canopy Volume</div></td>
-                <td id="tdHv1">—</td>
-                <td id="tdHv2">—</td>
-                <td id="tdHvDiff">—</td>
-                <td id="tdHvTrend">—</td>
-              </tr>
-              <tr>
-                <td><strong>Radar Veg. Index (RVI)</strong><div class="metric-sub">Biomass (0–1)</div></td>
-                <td id="tdRvi1">—</td>
-                <td id="tdRvi2">—</td>
-                <td id="tdRviDiff">—</td>
-                <td id="tdRviTrend">—</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-
-        <!-- Time-Series Charts (dB, RVI & Delta Columns) -->
-        <div class="chart-wrapper">
-          <div class="chart-tabs">
-            <button class="chart-tab active" data-chart="backscatter">Backscatter (dB)</button>
-            <button class="chart-tab" data-chart="rvi">Vegetation Index (RVI)</button>
-            <button class="chart-tab" data-chart="delta">Data Change (Δ Columns)</button>
+          <div style="display:flex; align-items:center; gap:6px;">
+            <span class="class-badge" id="parcelBadge">Standby</span>
+            <button type="button" class="btn-card-toggle" data-toggle="inspectorCardBody" title="Toggle section" aria-label="Toggle section">▾</button>
           </div>
-          <div class="canvas-holder">
-            <canvas id="parcelChart"></canvas>
+        </div>
+
+        <div id="inspectorCardBody" class="panel-collapsible-body">
+          <p class="parcel-explanation" id="parcelExplanation">
+            When you validate a bounded zone on the map, it is divided into a 3×3 grid of agricultural monitoring parcels. Click any parcel to inspect its polarimetric backscatter and RVI phenology. Choosing a new zone automatically wipes all previous data.
+          </p>
+
+          <!-- Dual-Date Telemetry Table With Columns Showing Data Changes -->
+          <div class="table-responsive">
+            <table class="telemetry-table">
+              <thead>
+                <tr>
+                  <th>SAR Metric</th>
+                  <th id="thDate1">Date 1 (t1)</th>
+                  <th id="thDate2">Date 2 (t2)</th>
+                  <th>Net Change (Δ)</th>
+                  <th>Trend / Dynamics</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><strong>Co-Pol γ⁰ HHHH</strong><div class="metric-sub">Water / Moisture</div></td>
+                  <td id="tdHh1">—</td>
+                  <td id="tdHh2">—</td>
+                  <td id="tdHhDiff">—</td>
+                  <td id="tdHhTrend">—</td>
+                </tr>
+                <tr>
+                  <td><strong>Cross-Pol γ⁰ HVHV</strong><div class="metric-sub">Canopy Volume</div></td>
+                  <td id="tdHv1">—</td>
+                  <td id="tdHv2">—</td>
+                  <td id="tdHvDiff">—</td>
+                  <td id="tdHvTrend">—</td>
+                </tr>
+                <tr>
+                  <td><strong>Radar Veg. Index (RVI)</strong><div class="metric-sub">Biomass (0–1)</div></td>
+                  <td id="tdRvi1">—</td>
+                  <td id="tdRvi2">—</td>
+                  <td id="tdRviDiff">—</td>
+                  <td id="tdRviTrend">—</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- Time-Series Charts (dB, RVI & Delta Columns) -->
+          <div class="chart-wrapper">
+            <div class="chart-tabs">
+              <button class="chart-tab active" data-chart="backscatter">Backscatter (dB)</button>
+              <button class="chart-tab" data-chart="rvi">Vegetation Index (RVI)</button>
+              <button class="chart-tab" data-chart="delta">Data Change (Δ Columns)</button>
+            </div>
+            <div class="canvas-holder">
+              <canvas id="parcelChart"></canvas>
+            </div>
           </div>
         </div>
       </div>

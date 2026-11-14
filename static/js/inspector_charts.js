@@ -317,6 +317,23 @@ class FieldInspectorCharts {
       this.chartInstance.destroy();
     }
 
+    // Vertical Canvas Gradients for Chart Aesthetics
+    const gradCyan = ctx.createLinearGradient(0, 0, 0, 160);
+    gradCyan.addColorStop(0, "rgba(56, 189, 248, 0.85)");
+    gradCyan.addColorStop(1, "rgba(56, 189, 248, 0.18)");
+
+    const gradEmerald = ctx.createLinearGradient(0, 0, 0, 160);
+    gradEmerald.addColorStop(0, "rgba(16, 185, 129, 0.85)");
+    gradEmerald.addColorStop(1, "rgba(16, 185, 129, 0.18)");
+
+    const gradAmber = ctx.createLinearGradient(0, 0, 0, 160);
+    gradAmber.addColorStop(0, "rgba(245, 158, 11, 0.85)");
+    gradAmber.addColorStop(1, "rgba(245, 158, 11, 0.18)");
+
+    const gradRose = ctx.createLinearGradient(0, 0, 0, 160);
+    gradRose.addColorStop(0, "rgba(239, 68, 68, 0.85)");
+    gradRose.addColorStop(1, "rgba(239, 68, 68, 0.18)");
+
     let datasets = [];
     let yTitle = "";
     let labels = ts.labels;
@@ -328,17 +345,19 @@ class FieldInspectorCharts {
           label: "Co-Pol HHHH (dB) — Water / Moisture",
           data: ts.hh_db,
           borderColor: "#38bdf8",
-          backgroundColor: "rgba(56, 189, 248, 0.55)",
+          backgroundColor: gradCyan,
           borderWidth: 1.5,
-          borderRadius: 4,
+          borderRadius: 6,
+          borderSkipped: false,
         },
         {
           label: "Cross-Pol HVHV (dB) — Crop Volume",
           data: ts.hv_db,
           borderColor: "#10b981",
-          backgroundColor: "rgba(16, 185, 129, 0.55)",
+          backgroundColor: gradEmerald,
           borderWidth: 1.5,
-          borderRadius: 4,
+          borderRadius: 6,
+          borderSkipped: false,
         },
       ];
     } else if (this.activeChartMode === "rvi") {
@@ -348,9 +367,10 @@ class FieldInspectorCharts {
           label: "Dual-Pol Radar Vegetation Index (RVI)",
           data: ts.rvi,
           borderColor: "#34d399",
-          backgroundColor: ["rgba(56, 189, 248, 0.55)", "rgba(16, 185, 129, 0.55)"],
+          backgroundColor: [gradCyan, gradEmerald],
           borderWidth: 1.5,
-          borderRadius: 4,
+          borderRadius: 6,
+          borderSkipped: false,
         },
       ];
     } else if (this.activeChartMode === "delta") {
@@ -371,9 +391,9 @@ class FieldInspectorCharts {
           label: "Net Change Column (Date 2 - Date 1)",
           data: [dHh, dHv, dRviScaled],
           backgroundColor: [
-            dHh >= 0 ? "rgba(56, 189, 248, 0.65)" : "rgba(245, 158, 11, 0.65)",
-            dHv >= 0 ? "rgba(16, 185, 129, 0.65)" : "rgba(239, 68, 68, 0.65)",
-            dRviRaw >= 0 ? "rgba(52, 211, 153, 0.65)" : "rgba(251, 146, 60, 0.65)",
+            dHh >= 0 ? gradCyan : gradAmber,
+            dHv >= 0 ? gradEmerald : gradRose,
+            dRviRaw >= 0 ? gradEmerald : gradAmber,
           ],
           borderColor: [
             dHh >= 0 ? "#38bdf8" : "#f59e0b",
@@ -381,7 +401,8 @@ class FieldInspectorCharts {
             dRviRaw >= 0 ? "#34d399" : "#fb923c",
           ],
           borderWidth: 1.5,
-          borderRadius: 4,
+          borderRadius: 6,
+          borderSkipped: false,
         },
       ];
     }
@@ -395,28 +416,60 @@ class FieldInspectorCharts {
       options: {
         responsive: true,
         maintainAspectRatio: false,
+        interaction: {
+          mode: "index",
+          intersect: false,
+        },
+        animation: {
+          duration: 450,
+          easing: "easeOutQuart",
+        },
         plugins: {
           legend: {
+            position: "top",
             labels: {
               color: "#cbd5e1",
-              font: { size: 11 },
+              font: { size: 10, weight: 600 },
+              boxWidth: 10,
+              boxHeight: 10,
+              usePointStyle: true,
+              pointStyle: "circle",
             },
+          },
+          tooltip: {
+            backgroundColor: "rgba(15, 23, 42, 0.94)",
+            titleColor: "#f8fafc",
+            bodyColor: "#cbd5e1",
+            borderColor: "rgba(148, 163, 184, 0.25)",
+            borderWidth: 1,
+            padding: 8,
+            cornerRadius: 6,
+            boxPadding: 4,
+            usePointStyle: true,
           },
         },
         scales: {
           x: {
             ticks: { color: "#94a3b8", font: { size: 10 } },
-            grid: { color: "rgba(148, 163, 184, 0.1)" },
+            grid: {
+              color: "rgba(148, 163, 184, 0.08)",
+              borderDash: [3, 3],
+              drawBorder: false,
+            },
           },
           y: {
             title: {
               display: true,
               text: yTitle,
               color: "#94a3b8",
-              font: { size: 10 },
+              font: { size: 10, weight: 600 },
             },
             ticks: { color: "#94a3b8", font: { size: 10 } },
-            grid: { color: "rgba(148, 163, 184, 0.1)" },
+            grid: {
+              color: "rgba(148, 163, 184, 0.08)",
+              borderDash: [3, 3],
+              drawBorder: false,
+            },
           },
         },
       },
