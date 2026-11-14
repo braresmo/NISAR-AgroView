@@ -75,10 +75,14 @@ document.addEventListener("DOMContentLoaded", async () => {
       btnValidate.disabled = true;
 
       try {
+        const polyData = mapCtrl.getSelectedPolygonData();
         const reqPayload = {
           lat: mapCtrl.selectedLat,
           lon: mapCtrl.selectedLon,
           box_km: mapCtrl.selectedBoxKm,
+          bounds: polyData.bounds,
+          polygon_wkt: polyData.polygon_wkt,
+          polygon_coordinates: polyData.polygon_coordinates,
           date_t1: d1,
           date_t2: d2,
         };

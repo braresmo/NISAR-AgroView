@@ -140,6 +140,33 @@ class AgroGoogleMapController {
     this.setTargetPosition(this.selectedLat, this.selectedLon, true);
   }
 
+  getSelectedPolygonData() {
+    const [[sRaw, wRaw], [nRaw, eRaw]] = this._computeBoxBounds(
+      this.selectedLat,
+      this.selectedLon,
+      this.selectedBoxKm
+    );
+    const south = Number(sRaw.toFixed(6));
+    const west = Number(wRaw.toFixed(6));
+    const north = Number(nRaw.toFixed(6));
+    const east = Number(eRaw.toFixed(6));
+
+    const polygonWkt = `POLYGON((${west} ${south}, ${east} ${south}, ${east} ${north}, ${west} ${north}, ${west} ${south}))`;
+    const polygonCoords = [
+      [west, south],
+      [east, south],
+      [east, north],
+      [west, north],
+      [west, south],
+    ];
+
+    return {
+      bounds: [south, west, north, east],
+      polygon_wkt: polygonWkt,
+      polygon_coordinates: polygonCoords,
+    };
+  }
+
   _drawTargetSelectionBox() {
     const boxBounds = this._computeBoxBounds(
       this.selectedLat,

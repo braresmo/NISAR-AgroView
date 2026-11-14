@@ -102,15 +102,26 @@ def _parse_granule_date(scene_name: str) -> datetime:
     return datetime(2026, 11, 1)
 
 
-def _find_nisar_granules_for_location(lat: float, lon: float) -> list:
+def _resize_2d_nearest(arr: np.ndarray, target_h: int, target_w: int) -> np.ndarray:
+    """Resample a 2D float32 array (preserving NaNs) to (target_h, target_w) so 20m and 10m granules align 1:1 with the polygon."""
+    h, w = arr.shape
+    if h == target_h and w == target_w:
+        return arr
+    r_idx = np.clip(np.round(np.linspace(0, h - 1, target_h)).astype(int), 0, h - 1)
+    c_idx = np.clip(np.round(np.linspace(0, w - 1, target_w)).astype(int), 0, w - 1)
+    return arr[np.ix_(r_idx, c_idx)]
+
+
+def _find_nisar_granules_for_location(lat: float, lon: float, polygon_wkt: str = None) -> list:
     """
     Query NASA ASF for dual-pol (DHDH / QPDH) NISAR L2 GCOV granules intersecting
-    the user's selected (lat, lon). If the exact point is in a gap/ocean, expand
-    the search bounding box around (lat, lon) to find the nearest regional granules.
+    the user's selected square POLYGON (or POINT). If the exact square is in a gap,
+    expand the search bounding box around (lat, lon) to find the nearest regional granules.
     """
-    # 1. Exact point search
-    wkt_queries = [f"POINT({lon:.5f} {lat:.5f})"]
-    # 2. Expanding regional search boxes if exact point has no dual-pol coverage
+    wkt_queries = []
+    if polygon_wkt:
+        wkt_queries.append(polygon_wkt)
+    wkt_queries.append(f"POINT({lon:.5f} {lat:.5f})")
     for deg in (1.5, 4.0, 10.0):
         w, e = max(-180.0, lon - deg), min(180.0, lon + deg)
         s, n = max(-80.0, lat - deg), min(80.0, lat + deg)
@@ -224,10 +235,12 @@ def _select_granule_pair(valid_prods: list, date_t1: str, date_t2: str):
     return p1, p2
 
 
-def _extract_sector_from_remote_h5(prod, lat: float, lon: float, size_px: int):
+def _extract_sector_from_remote_h5(prod, lat: float, lon: float, size_px: int, bounds_wgs84: list = None):
     """
     Open a single remote NASA Earthdata Cloud NISAR HDF5 granule via HTTP 206 Range Requests
-    and stream ONLY the bounded (size_px x size_px) 10m window for (lat, lon).
+    and stream ONLY the exact UTM bounding box matching the selected map square `bounds_wgs84`
+    ([south, west, north, east]), resampling to (size_px x size_px) so 10m and 20m granules
+    align at 1:1 scale with the Google Map square.
     """
     sname = prod.properties.get("sceneName", "")
     urls = [
@@ -244,33 +257,59 @@ def _extract_sector_from_remote_h5(prod, lat: float, lon: float, size_px: int):
         grid = h5_rem["/science/LSAR/GCOV/grids/frequencyA"]
         epsg = int(grid["projection"][()])
         to_utm = Transformer.from_crs("EPSG:4326", f"EPSG:{epsg}", always_xy=True)
-        cx_utm, cy_utm = to_utm.transform(lon, lat)
 
         x_coords = grid["xCoordinates"][:]
         y_coords = grid["yCoordinates"][:]
-
-        col_c = int(np.argmin(np.abs(x_coords - cx_utm)))
-        row_c = int(np.argmin(np.abs(y_coords - cy_utm)))
+        dx = abs(float(x_coords[1] - x_coords[0])) if len(x_coords) > 1 else 10.0
+        dy = abs(float(y_coords[1] - y_coords[0])) if len(y_coords) > 1 else 10.0
 
         h, w = grid["HHHH"].shape
-        half = size_px // 2
 
-        # Extract at the exact UTM row/col of (lat, lon); only step inward if the target
-        # falls in the diagonal NaN padding outside the radar swath
-        hh, hv = None, None
+        if bounds_wgs84 and len(bounds_wgs84) == 4:
+            south, west, north, east = bounds_wgs84
+            xs_u, ys_u = to_utm.transform([west, east, east, west], [south, south, north, north])
+            utm_xmin, utm_xmax = float(min(xs_u)), float(max(xs_u))
+            utm_ymin, utm_ymax = float(min(ys_u)), float(max(ys_u))
+
+            c_left = int(np.argmin(np.abs(x_coords - utm_xmin)))
+            c_right = int(np.argmin(np.abs(x_coords - utm_xmax)))
+            r_top = int(np.argmin(np.abs(y_coords - utm_ymax)))
+            r_bot = int(np.argmin(np.abs(y_coords - utm_ymin)))
+
+            c0_exact, c1_exact = min(c_left, c_right), max(c_left, c_right)
+            r0_exact, r1_exact = min(r_top, r_bot), max(r_top, r_bot)
+
+            win_h = max(32, r1_exact - r0_exact)
+            win_w = max(32, c1_exact - c0_exact)
+            row_c = (r0_exact + r1_exact) // 2
+            col_c = (c0_exact + c1_exact) // 2
+        else:
+            cx_utm, cy_utm = to_utm.transform(lon, lat)
+            col_c = int(np.argmin(np.abs(x_coords - cx_utm)))
+            row_c = int(np.argmin(np.abs(y_coords - cy_utm)))
+            win_h = max(32, int(round((size_px * 10.0) / dy)))
+            win_w = max(32, int(round((size_px * 10.0) / dx)))
+
+        half_r = win_h // 2
+        half_c = win_w // 2
+
+        hh_raw, hv_raw = None, None
         for alpha in (0.0, 0.2, 0.4, 0.6):
             rc = int(round((1.0 - alpha) * row_c + alpha * (h // 2)))
             cc = int(round((1.0 - alpha) * col_c + alpha * (w // 2)))
-            r0 = max(0, min(h - size_px, rc - half))
-            c0 = max(0, min(w - size_px, cc - half))
-            r1, c1 = r0 + size_px, c0 + size_px
+            r0 = max(0, min(h - win_h, rc - half_r))
+            c0 = max(0, min(w - win_w, cc - half_c))
+            r1, c1 = r0 + win_h, c0 + win_w
 
             cand_hh = grid["HHHH"][r0:r1, c0:c1].astype(np.float32)
             valid_ratio = float(np.mean(np.isfinite(cand_hh) & (cand_hh > 0)))
             if valid_ratio >= 0.45 or alpha == 0.6:
-                hh = cand_hh
-                hv = grid["HVHV"][r0:r1, c0:c1].astype(np.float32)
+                hh_raw = cand_hh
+                hv_raw = grid["HVHV"][r0:r1, c0:c1].astype(np.float32)
                 break
+
+    hh = _resize_2d_nearest(hh_raw, size_px, size_px)
+    hv = _resize_2d_nearest(hv_raw, size_px, size_px)
 
     coords_poly = prod.geometry.get("coordinates", [[]])[0] if hasattr(prod, "geometry") and prod.geometry else []
     poly_wkt = "POLYGON((" + ", ".join(f"{pt[0]:.5f} {pt[1]:.5f}" for pt in coords_poly) + "))" if coords_poly else "N/A"
@@ -278,15 +317,16 @@ def _extract_sector_from_remote_h5(prod, lat: float, lon: float, size_px: int):
     full_gb = rf.size / (1024 ** 3)
     logger.info("[GRANULE POLYGON] %s -> %s", sname, poly_wkt)
     logger.info(
-        "[HDF5 SLICE] Extracted %dx%d window [%d:%d, %d:%d] at exact (row=%d, col=%d) from %s (%.2f MB in %d HTTP 206 requests)",
-        size_px,
-        size_px,
+        "[HDF5 SLICE] Extracted native %dx%d window [%d:%d, %d:%d] (spacing=%.0fm) -> resampled to %dx%d from %s (%.2f MB in %d HTTP 206 requests)",
+        win_h,
+        win_w,
         r0,
         r1,
         c0,
         c1,
-        row_c,
-        col_c,
+        dx,
+        size_px,
+        size_px,
         sname,
         streamed_mb,
         rf.requests_count,
@@ -410,12 +450,20 @@ def _apply_date_phenology_response(
     return (hh * hh_factor).astype(np.float32), (hv * hv_factor).astype(np.float32)
 
 
-def _stream_dynamic_nasa_sector(lat: float, lon: float, size_px: int, date_t1: str, date_t2: str) -> dict:
+def _stream_dynamic_nasa_sector(
+    lat: float,
+    lon: float,
+    size_px: int,
+    date_t1: str,
+    date_t2: str,
+    bounds_wgs84: list = None,
+    polygon_wkt: str = None,
+) -> dict:
     """
-    Dynamically search NASA ASF for the selected (lat, lon) and dates (date_t1, date_t2),
-    and stream only the bounded 10m sector for Date 1 and Date 2 via HTTP 206 Range Requests.
+    Dynamically search NASA ASF for the selected square POLYGON and dates (date_t1, date_t2),
+    and stream only the exact bounded sector for Date 1 and Date 2 via HTTP 206 Range Requests.
     """
-    fallback_prods = _find_nisar_granules_for_location(lat, lon)
+    fallback_prods = _find_nisar_granules_for_location(lat, lon, polygon_wkt=polygon_wkt)
 
     with ThreadPoolExecutor(max_workers=2) as search_pool:
         fut_p1 = search_pool.submit(_find_granule_for_date, lat, lon, date_t1, fallback_prods)
@@ -423,23 +471,21 @@ def _stream_dynamic_nasa_sector(lat: float, lon: float, size_px: int, date_t1: s
         p1 = fut_p1.result()
         p2 = fut_p2.result()
 
-    # If both dates resolved to the same granule and another granule exists in the same track/frame,
-    # use the second granule when appropriate, or stream once and apply independent date calibration
     track = int(p2.properties.get("pathNumber") or 77)
     frame = int(p2.properties.get("frameNumber") or 80)
 
     same_granule = p1.properties.get("sceneName") == p2.properties.get("sceneName")
 
     if same_granule:
-        hh_base, hv_base, sname2, mb2, gb2 = _extract_sector_from_remote_h5(p2, lat, lon, size_px)
+        hh_base, hv_base, sname2, mb2, gb2 = _extract_sector_from_remote_h5(p2, lat, lon, size_px, bounds_wgs84)
         sname1 = sname2
         mb1, gb1 = 0.0, 0.0
         hh_t1, hv_t1 = _apply_date_phenology_response(hh_base, hv_base, lat, lon, date_t1, sname1)
         hh_t2, hv_t2 = _apply_date_phenology_response(hh_base, hv_base, lat, lon, date_t2, sname2)
     else:
         with ThreadPoolExecutor(max_workers=2) as pool:
-            f1 = pool.submit(_extract_sector_from_remote_h5, p1, lat, lon, size_px)
-            f2 = pool.submit(_extract_sector_from_remote_h5, p2, lat, lon, size_px)
+            f1 = pool.submit(_extract_sector_from_remote_h5, p1, lat, lon, size_px, bounds_wgs84)
+            f2 = pool.submit(_extract_sector_from_remote_h5, p2, lat, lon, size_px, bounds_wgs84)
             hh_raw1, hv_raw1, sname1, mb1, gb1 = f1.result()
             hh_raw2, hv_raw2, sname2, mb2, gb2 = f2.result()
 
@@ -491,10 +537,28 @@ def validate_selected_zone_ephemeral(payload: dict) -> dict:
     if date_t1 == date_t2:
         raise ValueError("Please select two different dates (Date 1 and Date 2) to compare agricultural change.")
 
-    bounds_wgs84 = _compute_wgs84_box_bounds(lat, lon, box_km)
+    bounds_wgs84 = payload.get("bounds")
+    if not bounds_wgs84 or len(bounds_wgs84) != 4:
+        bounds_wgs84 = _compute_wgs84_box_bounds(lat, lon, box_km)
+    else:
+        bounds_wgs84 = [round(float(x), 6) for x in bounds_wgs84]
 
-    # Dynamically query NASA ASF at (lat, lon) and stream only the bounded sector via HTTP 206
-    raw_data = _stream_dynamic_nasa_sector(lat, lon, size_px, date_t1, date_t2)
+    south, west, north, east = bounds_wgs84
+    polygon_wkt = payload.get("polygon_wkt") or (
+        f"POLYGON(({west} {south}, {east} {south}, {east} {north}, {west} {north}, {west} {south}))"
+    )
+    logger.info(">>> [SQUARE POLYGON] %s (bounds=%s)", polygon_wkt, bounds_wgs84)
+
+    # Dynamically query NASA ASF using the square POLYGON and stream only the exact bounded sector via HTTP 206
+    raw_data = _stream_dynamic_nasa_sector(
+        lat,
+        lon,
+        size_px,
+        date_t1,
+        date_t2,
+        bounds_wgs84=bounds_wgs84,
+        polygon_wkt=polygon_wkt,
+    )
 
     hh_t1 = raw_data["hh_t1"]
     hv_t1 = raw_data["hv_t1"]
