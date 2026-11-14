@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 import gc
 import hashlib
 import json
+import logging
 import os
 import re
 import sys
@@ -19,6 +20,14 @@ import time
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)-5s | %(message)s",
+    datefmt="%H:%M:%S",
+    stream=sys.stdout,
+)
+logger = logging.getLogger("nisar.app")
 
 import asf_search as asf
 import h5py
@@ -108,6 +117,7 @@ def _find_nisar_granules_for_location(lat: float, lon: float) -> list:
         wkt_queries.append(f"POLYGON(({w:.3f} {s:.3f},{e:.3f} {s:.3f},{e:.3f} {n:.3f},{w:.3f} {n:.3f},{w:.3f} {s:.3f}))")
 
     for wkt in wkt_queries:
+        logger.info("[ASF SEARCH] Querying dataset=NISAR, processingLevel=GCOV, intersectsWith=%s", wkt)
         results = asf.search(
             dataset="NISAR",
             processingLevel="GCOV",
@@ -119,6 +129,7 @@ def _find_nisar_granules_for_location(lat: float, lon: float) -> list:
             if "NISAR_L2_PR_GCOV" in p.properties.get("sceneName", "")
             and any(pol in p.properties.get("sceneName", "") for pol in ("DHDH", "QPDH"))
         ]
+        logger.info("[ASF SEARCH] Found %d total results (%d Dual-Pol DHDH/QPDH granules)", len(results), len(valid_prods))
         if valid_prods:
             return valid_prods
 
@@ -209,6 +220,18 @@ def _extract_sector_from_remote_h5(prod, lat: float, lon: float, size_px: int):
 
     streamed_mb = rf.bytes_downloaded / (1024 * 1024)
     full_gb = rf.size / (1024 ** 3)
+    logger.info(
+        "[HDF5 SLICE] Extracted %dx%d window [%d:%d, %d:%d] from %s (%.2f MB in %d HTTP 206 requests)",
+        size_px,
+        size_px,
+        r0,
+        r1,
+        c0,
+        c1,
+        sname,
+        streamed_mb,
+        rf.requests_count,
+    )
     return hh, hv, sname, streamed_mb, full_gb
 
 
@@ -227,6 +250,13 @@ def _find_granule_for_date(lat: float, lon: float, date_str: str, fallback_prods
     point_wkt = f"POINT({lon:.5f} {lat:.5f})"
 
     try:
+        logger.info(
+            "[ASF DATE SEARCH] Querying date=%s window [%s .. %s] at %s",
+            date_str,
+            start_iso,
+            end_iso,
+            point_wkt,
+        )
         dated_results = asf.search(
             dataset="NISAR",
             processingLevel="GCOV",
@@ -244,15 +274,19 @@ def _find_granule_for_date(lat: float, lon: float, date_str: str, fallback_prods
             valid_dated.sort(
                 key=lambda p: abs((_parse_granule_date(p.properties.get("sceneName", "")) - target_dt).days)
             )
+            chosen = valid_dated[0].properties.get("sceneName", "")
+            logger.info("[ASF DATE SEARCH] Matched granule for %s -> %s", date_str, chosen)
             return valid_dated[0]
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("[ASF DATE SEARCH] Error querying date %s: %s", date_str, exc)
 
     if fallback_prods:
         sorted_fb = sorted(
             fallback_prods,
             key=lambda p: abs((_parse_granule_date(p.properties.get("sceneName", "")) - target_dt).days),
         )
+        chosen_fb = sorted_fb[0].properties.get("sceneName", "")
+        logger.info("[ASF DATE SEARCH] No exact window match for %s; using closest fallback -> %s", date_str, chosen_fb)
         return sorted_fb[0]
 
     return None
@@ -379,6 +413,16 @@ def validate_selected_zone_ephemeral(payload: dict) -> dict:
 
     date_t1 = str(payload.get("date_t1", "2026-10-17"))
     date_t2 = str(payload.get("date_t2", "2026-11-10"))
+    logger.info(
+        ">>> [REQUEST /api/validate-zone] lat=%.4f, lon=%.4f, box_km=%.1f (%dx%d px), date_t1=%s, date_t2=%s",
+        lat,
+        lon,
+        box_km,
+        size_px,
+        size_px,
+        date_t1,
+        date_t2,
+    )
     if date_t1 == date_t2:
         raise ValueError("Please select two different dates (Date 1 and Date 2) to compare agricultural change.")
 
@@ -434,6 +478,17 @@ def validate_selected_zone_ephemeral(payload: dict) -> dict:
     )
 
     elapsed_s = round(time.time() - t0, 2)
+    logger.info(
+        "<<< [RESPONSE /api/validate-zone] Done in %.2fs | streamed=%.2f MB | HH: %.2f -> %.2f dB | HV: %.2f -> %.2f dB | RVI: %.3f -> %.3f",
+        elapsed_s,
+        raw_data["streamed_mb"],
+        stats["mean_hh_t1_db"],
+        stats["mean_hh_t2_db"],
+        stats["mean_hv_t1_db"],
+        stats["mean_hv_t2_db"],
+        stats["mean_rvi_t1"],
+        stats["mean_rvi_t2"],
+    )
     lat_hemi = "N" if lat >= 0 else "S"
     lon_hemi = "E" if lon >= 0 else "W"
 

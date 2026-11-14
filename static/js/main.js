@@ -75,19 +75,23 @@ document.addEventListener("DOMContentLoaded", async () => {
       btnValidate.disabled = true;
 
       try {
+        const reqPayload = {
+          lat: mapCtrl.selectedLat,
+          lon: mapCtrl.selectedLon,
+          box_km: mapCtrl.selectedBoxKm,
+          date_t1: d1,
+          date_t2: d2,
+        };
+        console.log("[NISAR AgroView] >>> Sending POST /api/validate-zone:", reqPayload);
+
         const resp = await fetch("/api/validate-zone", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            lat: mapCtrl.selectedLat,
-            lon: mapCtrl.selectedLon,
-            box_km: mapCtrl.selectedBoxKm,
-            date_t1: d1,
-            date_t2: d2,
-          }),
+          body: JSON.stringify(reqPayload),
         });
 
         const data = await resp.json();
+        console.log("[NISAR AgroView] <<< Received /api/validate-zone response:", data);
         if (!resp.ok || data.status !== "ok") {
           throw new Error(data.message || "Validation request failed.");
         }

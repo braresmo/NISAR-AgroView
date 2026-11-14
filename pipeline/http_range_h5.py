@@ -6,28 +6,38 @@ directly from NASA Earthdata Cloud (ASF) without downloading full 4-9 GB .h5 gra
 """
 
 import io
+import logging
 import os
+import time
 from pathlib import Path
 import asf_search as asf
 from dotenv import load_dotenv
+
+logger = logging.getLogger("nisar.http_range")
 
 
 def create_asf_session(env_path=None):
     """Authenticate an ASFSession using NASA_USER and NASA_PASS from project .env."""
     if env_path and Path(env_path).exists():
-        load_dotenv(env_path, override=True)
+        used_env = Path(env_path)
+        load_dotenv(used_env, override=True)
     else:
         project_env = Path(__file__).resolve().parents[1] / ".env"
         if project_env.exists():
+            used_env = project_env
             load_dotenv(project_env, override=True)
         else:
+            used_env = Path(".env")
             load_dotenv(override=True)
 
     username = os.getenv("NASA_USER")
     password = os.getenv("NASA_PASS")
+    logger.info("[AUTH] Authenticating NASA Earthdata session (env=%s, user=%s)", used_env, username)
+    t0 = time.time()
     session = asf.ASFSession()
     if username and password:
         session.auth_with_creds(username, password)
+    logger.info("[AUTH] NASA Earthdata session ready in %.2fs", time.time() - t0)
     return session
 
 
@@ -56,6 +66,9 @@ class HTTPRangeFile(io.RawIOBase):
           3. Cache the HDF5 superblock & root B-tree header in self._pages[0].
         """
         end_byte = self.page_size - 1
+        short_name = self.url.split("/")[-1]
+        logger.info("[HTTP 206] Probing & prefetching header: GET %s (Range: bytes=0-%d)", short_name, end_byte)
+        t0 = time.time()
         resp = self.session.get(
             self.url,
             headers={"Range": f"bytes=0-{end_byte}"},
@@ -71,9 +84,15 @@ class HTTPRangeFile(io.RawIOBase):
         self.requests_count += 1
 
         content_range = resp.headers.get("Content-Range", "")
-        if "/" in content_range:
-            return int(content_range.split("/")[-1])
-        return int(resp.headers.get("Content-Length", len(data)))
+        total_size = int(content_range.split("/")[-1]) if "/" in content_range else int(resp.headers.get("Content-Length", len(data)))
+        logger.info(
+            "[HTTP 206] Header ready: status=%d, chunk=%.1f KB, total_granule=%.2f GB (%.2fs)",
+            resp.status_code,
+            len(data) / 1024.0,
+            total_size / (1024 ** 3),
+            time.time() - t0,
+        )
+        return total_size
 
     def readable(self) -> bool:
         return True
@@ -103,6 +122,7 @@ class HTTPRangeFile(io.RawIOBase):
         end_inclusive = min(end_inclusive, self.size - 1)
         if start > end_inclusive:
             return b""
+        t0 = time.time()
         resp = self.session.get(
             self.url,
             headers={"Range": f"bytes={start}-{end_inclusive}"},
@@ -112,6 +132,16 @@ class HTTPRangeFile(io.RawIOBase):
         data = resp.content
         self.bytes_downloaded += len(data)
         self.requests_count += 1
+        logger.info(
+            "[HTTP 206] Req #%d: Range bytes=%d-%d -> HTTP %d (%.1f KB in %.2fs | cumulative=%.2f MB)",
+            self.requests_count,
+            start,
+            end_inclusive,
+            resp.status_code,
+            len(data) / 1024.0,
+            time.time() - t0,
+            self.bytes_downloaded / (1024 * 1024),
+        )
         return data
 
     def _get_page(self, page_idx: int) -> bytes:
